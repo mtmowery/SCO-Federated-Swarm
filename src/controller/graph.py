@@ -19,8 +19,9 @@ Graph topology:
 import logging
 from typing import Any
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.checkpoint.memory import MemorySaver
 
 from shared.schemas import InsightState, AgencyName
 from shared.config import settings
@@ -290,8 +291,8 @@ def _is_identity_match(info1: dict[str, Any], info2: dict[str, Any]) -> bool:
         return True
 
     # Check name + DOB match
-    name1 = info1.get("name", "").lower().strip()
-    name2 = info2.get("name", "").lower().strip()
+    name1 = (info1.get("name") or "").lower().strip()
+    name2 = (info2.get("name") or "").lower().strip()
     dob1 = info1.get("dob")
     dob2 = info2.get("dob")
 
@@ -326,7 +327,7 @@ def _calculate_match_confidence(info1: dict[str, Any], info2: dict[str, Any]) ->
     # High confidence: name + DOB
     if info1.get("name") and info2.get("name") and info1.get("dob") and info2.get("dob"):
         if (
-            info1.get("name").lower() == info2.get("name").lower()
+            (info1.get("name") or "").lower() == (info2.get("name") or "").lower()
             and info1.get("dob") == info2.get("dob")
         ):
             return 0.95
@@ -415,14 +416,18 @@ def build_graph() -> CompiledStateGraph:
     graph.add_edge("answer", END)
 
     # Set entry point
-    graph.set_entry_point("intent")
+    graph.add_edge(START, "intent")
+
+    # Add memory checkpointer
+    memory = MemorySaver()
 
     # Compile
-    return graph.compile()
+    return graph.compile(checkpointer=memory)
 
 
 # Global compiled graph instance
 _graph: CompiledStateGraph | None = None
+
 
 
 def get_graph() -> CompiledStateGraph:
@@ -433,12 +438,14 @@ def get_graph() -> CompiledStateGraph:
     return _graph
 
 
-async def run_query(question: str) -> dict[str, Any]:
+async def run_query(question: str, thread_id: str = "default_thread") -> dict[str, Any]:
     """
     Run a query through the complete federated AI swarm.
 
     Args:
         question: Natural language question
+        thread_id: Conversation thread identifier for memory
+
 
     Returns:
         Dictionary with:
@@ -469,7 +476,8 @@ async def run_query(question: str) -> dict[str, Any]:
     }
 
     try:
-        final_state = await graph.ainvoke(initial_state)
+        config = {"configurable": {"thread_id": thread_id}}
+        final_state = await graph.ainvoke(initial_state, config=config)
 
         return {
             "answer": final_state.get("answer", ""),

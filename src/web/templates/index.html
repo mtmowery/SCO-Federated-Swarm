@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Federated Swarm Intelligence</title>
+    <!-- Use standard fonts matching legacy design -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #090a0f;
+            --surface: rgba(26, 29, 39, 0.65);
+            --surface-hover: rgba(35, 39, 51, 0.8);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(56, 189, 248, 0.4);
+            --text-primary: #f0f2f8;
+            --text-secondary: #949ab0;
+            --accent: #38bdf8;
+            --accent-glow: rgba(56, 189, 248, 0.3);
+            --gradient-sidebar: linear-gradient(180deg, rgba(15,20,32,0.9) 0%, rgba(9,10,15,0.9) 100%);
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body {
+            background: radial-gradient(circle at top left, #1a1f35 0%, var(--bg-color) 100%);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* --- Sidebar (Conversation History) --- */
+        .sidebar {
+            width: 320px;
+            background: var(--gradient-sidebar);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            z-index: 10;
+        }
+        .sidebar-header {
+            padding: 24px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .brand {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            letter-spacing: -0.5px;
+        }
+        .brand span { color: var(--accent); text-shadow: 0 0 10px var(--accent-glow); }
+        
+        .new-chat-btn {
+            margin-top: 16px;
+            width: 100%;
+            padding: 12px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+        }
+        .new-chat-btn:hover {
+            background: rgba(255,255,255,0.08);
+            border-color: var(--accent);
+            box-shadow: 0 4px 12px var(--accent-glow);
+            transform: translateY(-1px);
+        }
+
+        .history-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .history-item {
+            padding: 12px 16px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .history-item:hover {
+            background: rgba(255,255,255,0.03);
+            color: var(--text-primary);
+        }
+        .history-item.active {
+            background: var(--surface);
+            color: var(--accent);
+            border-color: rgba(56, 189, 248, 0.2);
+            font-weight: 500;
+        }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+        /* --- Main Chat Area --- */
+        .workspace {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            scroll-behavior: smooth;
+        }
+        
+        .message-row {
+            display: flex;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            animation: slideUp 0.3s ease-out forwards;
+        }
+        
+        .message-row.user { justify-content: flex-end; }
+        .message-row.assistant { justify-content: flex-start; }
+        
+        .message-bubble {
+            padding: 16px 20px;
+            border-radius: var(--radius-lg);
+            font-size: 15px;
+            line-height: 1.6;
+            max-width: 85%;
+            word-wrap: break-word;
+        }
+        
+        .message-row.user .message-bubble {
+            background: rgba(56, 189, 248, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-top-right-radius: 4px;
+        }
+        
+        .message-row.assistant .message-bubble {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-top-left-radius: 4px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+
+        /* Markdown Styles in Chat Bubble */
+        .message-bubble h1, .message-bubble h2, .message-bubble h3 {
+            margin-bottom: 12px;
+            color: #fff;
+            font-weight: 600;
+        }
+        .message-bubble p { margin-bottom: 12px; }
+        .message-bubble p:last-child { margin-bottom: 0; }
+        .message-bubble strong { color: var(--accent); }
+        .message-bubble ul { margin-left: 20px; margin-bottom: 12px; }
+        .message-bubble code {
+            background: rgba(0,0,0,0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        .message-bubble pre code {
+            display: block;
+            padding: 12px;
+            overflow-x: auto;
+            border: 1px solid rgba(255,255,255,0.05);
+            margin: 12px 0;
+        }
+
+        /* Agency Tags */
+        .sources-bar {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+        }
+        .source-tag {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .source-tag.idhw { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: #10b981; }
+        .source-tag.idjc { background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.3); color: #38bdf8; }
+        .source-tag.idoc { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #ef4444; }
+
+        /* --- Input Area --- */
+        .input-area {
+            padding: 24px;
+            background: linear-gradient(0deg, var(--bg-color) 40%, transparent 100%);
+            display: flex;
+            justify-content: center;
+            z-index: 10;
+        }
+        .input-box {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            align-items: flex-end;
+            background: rgba(15, 20, 32, 0.8);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 24px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 8px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .input-box:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px rgba(56,189,248,0.2), 0 10px 30px rgba(0,0,0,0.5);
+        }
+        
+        textarea {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-primary);
+            font-size: 15px;
+            padding: 12px 16px;
+            resize: none;
+            outline: none;
+            max-height: 200px;
+            min-height: 48px;
+            line-height: 1.5;
+        }
+        textarea::placeholder { color: rgba(255,255,255,0.3); }
+
+        .send-btn {
+            background: var(--accent);
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            margin: 4px;
+            transition: all 0.2s;
+            opacity: 0.8;
+            flex-shrink: 0;
+        }
+        .send-btn:hover {
+            opacity: 1;
+            transform: scale(1.05);
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+        .send-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: #000;
+            transform: translateX(1px);
+        }
+
+        /* --- Typing Indicator --- */
+        .typing-indicator {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            padding: 16px 20px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            border-top-left-radius: 4px;
+            width: fit-content;
+        }
+        .typing-indicator.active { display: flex; }
+        .dot {
+            width: 6px;
+            height: 6px;
+            background: var(--accent);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .dot:nth-child(1) { animation-delay: -0.32s; }
+        .dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        /* Execution Trace / Planning indicator */
+        .execution-trace {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: monospace;
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 6px;
+            display: none;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="brand">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM11 19.93C7.06 19.43 4 16.03 4 12C4 7.97 7.06 4.57 11 4.07V19.93ZM13 4.07C16.94 4.57 20 7.97 20 12C20 16.03 16.94 19.43 13 19.93V4.07Z" fill="var(--accent)"/>
+                </svg>
+                <span>Federated</span> Swarm
+            </div>
+            <button class="new-chat-btn" onclick="startNewChat()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                New Conversation
+            </button>
+        </div>
+        <div class="history-list" id="historyList">
+            <!-- Populated via API -->
+        </div>
+    </aside>
+
+    <main class="workspace">
+        <div class="chat-container" id="chatContainer">
+            <!-- Empty state -->
+            <div id="emptyState" style="text-align:center; padding-top: 80px; color: var(--text-secondary); animation: slideUp 0.5s ease;">
+                <h2 style="color:var(--text-primary); margin-bottom: 12px; font-weight:500;">How can I help you today?</h2>
+                <p style="font-size: 14px; max-width: 400px; margin:0 auto; line-height: 1.6;">
+                    The federated swarm connects directly to IDHW, IDJC, and IDOC graph databases. Ask questions spanning multiple agencies or deep-dive into an individual's history.
+                </p>
+                <div style="display:flex; gap:12px; justify-content:center; margin-top:32px; flex-wrap:wrap">
+                    <button class="new-chat-btn" style="width:auto; padding:8px 16px; font-size:12px" onclick="setInputValue('How many kids are in IDJC?')">"How many kids are in IDJC?"</button>
+                    <button class="new-chat-btn" style="width:auto; padding:8px 16px; font-size:12px" onclick="setInputValue('Count foster youth with juvenile records')">"Count foster youth with juvenile records"</button>
+                </div>
+            </div>
+            
+            <!-- Messages injected here -->
+            
+            <!-- Typing Indicator Row -->
+            <div class="message-row assistant" id="loaderRow" style="display:none; flex-direction: column; align-items: flex-start;">
+                <div class="typing-indicator active">
+                    <div class="dot"></div>
+                    <div class="dot"></div>
+                    <div class="dot"></div>
+                </div>
+                <div class="execution-trace" id="executionTrace">Initializing Swarm Orchestration...</div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-box">
+                <textarea id="messageInput" placeholder="Message the federated swarm..." rows="1" oninput="autoResize(this)" onkeydown="handleEnter(event)"></textarea>
+                <button class="send-btn" onclick="sendMessage()">
+                    <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path></svg>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let currentThreadId = null;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadHistory();
+        });
+
+        function autoResize(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+            if (el.value === '') el.style.height = '48px';
+        }
+
+        function handleEnter(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        }
+        
+        function setInputValue(val) {
+            document.getElementById('messageInput').value = val;
+            sendMessage();
+        }
+
+        function startNewChat() {
+            currentThreadId = null;
+            document.getElementById('chatContainer').innerHTML = `
+                <div id="emptyState" style="text-align:center; padding-top: 80px; color: var(--text-secondary); animation: slideUp 0.5s ease;">
+                    <h2 style="color:var(--text-primary); margin-bottom: 12px; font-weight:500;">Ready for a new inquiry.</h2>
+                    <p style="font-size: 14px;">The swarm memory has been cleared for this context.</p>
+                </div>
+                <div class="message-row assistant" id="loaderRow" style="display:none; flex-direction: column; align-items: flex-start;">
+                    <div class="typing-indicator active">
+                        <div class="dot"></div>
+                        <div class="dot"></div>
+                        <div class="dot"></div>
+                    </div>
+                </div>
+            `;
+            document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+        }
+
+        function appendMessage(role, content, sources=[]) {
+            const container = document.getElementById('chatContainer');
+            const loaderRow = document.getElementById('loaderRow');
+            
+            // Remove empty state
+            const empty = document.getElementById('emptyState');
+            if(empty) empty.remove();
+            
+            const row = document.createElement('div');
+            row.className = `message-row ${role}`;
+            
+            let html = ``;
+            if(role === 'assistant') {
+                html = `<div class="message-bubble">${marked.parse(content)}`;
+                if(sources && sources.length > 0) {
+                    html += `<div class="sources-bar">`;
+                    sources.forEach(src => {
+                        html += `<span class="source-tag ${src.toLowerCase()}">${src}</span>`;
+                    });
+                    html += `</div>`;
+                }
+                html += `</div>`;
+            } else {
+                // User message
+                html = `<div class="message-bubble">${content.replace(/\n/g, '<br>')}</div>`;
+            }
+            
+            row.innerHTML = html;
+            
+            // Insert before loader
+            container.insertBefore(row, loaderRow);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const msg = input.value.trim();
+            if(!msg) return;
+
+            // Reset input
+            input.value = '';
+            input.style.height = '48px';
+
+            // Show user message
+            appendMessage('user', msg);
+
+            // Show loader
+            const loaderRow = document.getElementById('loaderRow');
+            const traceEl = document.getElementById('executionTrace');
+            loaderRow.style.display = 'flex';
+            traceEl.style.display = 'none'; // Only show if long load
+            traceEl.innerHTML = "Initializing Graph Orchestrator...<br>";
+            
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: msg, thread_id: currentThreadId })
+                });
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    appendMessage('assistant', `**System Error:** ${data.error}`);
+                } else {
+                    currentThreadId = data.thread_id;
+                    appendMessage('assistant', data.answer, data.sources);
+                    loadHistory();
+                }
+
+            } catch (error) {
+                appendMessage('assistant', `**Network Error:** Could not connect to swarm endpoints.`);
+            } finally {
+                loaderRow.style.display = 'none';
+                traceEl.style.display = 'none';
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const res = await fetch('/api/history');
+                const data = await res.json();
+                const list = document.getElementById('historyList');
+                list.innerHTML = '';
+                
+                // Sort keys so newest are likely first (UUID dict is ordered in python but let's just append)
+                for (const [tid, title] of Object.entries(data).reverse()) {
+                    const div = document.createElement('div');
+                    div.className = `history-item ${tid === currentThreadId ? 'active' : ''}`;
+                    div.textContent = title;
+                    div.onclick = () => loadThread(tid);
+                    list.appendChild(div);
+                }
+            } catch(e) {
+                console.error("Failed to load history.");
+            }
+        }
+
+        async function loadThread(tid) {
+            currentThreadId = tid;
+            document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            const container = document.getElementById('chatContainer');
+            // Keep loader row
+            container.innerHTML = `
+                <div class="message-row assistant" id="loaderRow" style="display:none; flex-direction: column; align-items: flex-start;">
+                    <div class="typing-indicator active">
+                        <div class="dot"></div>
+                        <div class="dot"></div>
+                        <div class="dot"></div>
+                    </div>
+                </div>
+            `;
+            
+            try {
+                const res = await fetch(`/api/history/${tid}`);
+                const messages = await res.json();
+                
+                if(messages.length === 0) startNewChat();
+                else {
+                    messages.forEach(m => {
+                        appendMessage(m.role, m.content, m.sources || []);
+                    });
+                }
+            } catch(e) {
+                startNewChat();
+            }
+        }
+    </script>
+</body>
+</html>

@@ -263,9 +263,12 @@ class MCPClient:
             )
             self._record_success(agency)
             data = response.json()
-            if not data.get("success", False):
-                logger.error(f"Tool execution returned error: {data.get('error')}")
-                raise ValueError(data.get("error", "Unknown execution error"))
+            is_success = data.get("success", False) or data.get("status") == "success"
+            
+            if not is_success:
+                error_msg = data.get("error", data.get("detail", "Unknown execution error"))
+                logger.error(f"Tool execution returned error: {error_msg}")
+                raise ValueError(error_msg)
             return data.get("result", {})
         except Exception as e:
             self._record_failure(agency)

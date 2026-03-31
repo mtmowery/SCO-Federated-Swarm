@@ -10,6 +10,7 @@ Provides connection factories and session management for all data sources:
 
 import logging
 from typing import Optional, AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
@@ -273,6 +274,7 @@ async def get_qdrant_client() -> AsyncQdrantClient:
     return await DatabaseManager.get_qdrant_client()
 
 
+@asynccontextmanager
 async def pg_session_context(agency: str) -> AsyncGenerator[AsyncSession, None]:
     """
     Context manager for PostgreSQL sessions.

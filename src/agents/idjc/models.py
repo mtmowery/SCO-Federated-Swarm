@@ -63,16 +63,8 @@ class IDJCCommitment(Base):
     # Status tracking
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True, default="Active")
 
-    # Audit columns
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-    )
+    # Audit columns removed because they do not exist in the database schema.
+
 
     def __repr__(self) -> str:
         return (
@@ -93,15 +85,11 @@ class IDJCCommitment(Base):
             "last_name": self.last_name,
             "first_name": self.first_name,
             "middle_name": self.middle_name,
-            "dob": self.dob.isoformat() if self.dob else None,
+            "dob": self.dob.isoformat() if hasattr(self.dob, 'isoformat') else self.dob,
             "gender": self.gender,
             "ssn": self.ssn,
-            "date_of_commitment": self.date_of_commitment.isoformat()
-            if self.date_of_commitment
-            else None,
-            "date_of_release": self.date_of_release.isoformat()
-            if self.date_of_release
-            else None,
+            "date_of_commitment": self.date_of_commitment.isoformat() if hasattr(self.date_of_commitment, 'isoformat') else self.date_of_commitment,
+            "date_of_release": self.date_of_release.isoformat() if hasattr(self.date_of_release, 'isoformat') else self.date_of_release,
             "committing_county": self.committing_county,
             "offense_number": self.offense_number,
             "statute_code": self.statute_code,
@@ -110,8 +98,6 @@ class IDJCCommitment(Base):
             "offense_level": self.offense_level,
             "significance_level": self.significance_level,
             "status": self.status,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
         }
 
 

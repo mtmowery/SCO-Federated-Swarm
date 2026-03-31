@@ -123,22 +123,30 @@ async def execute_idjc(state: InsightState) -> dict:
 
             commitment_data = {}
             if any(
-                kw in " ".join(plan).lower()
-                for kw in ["detention", "commitment", "juvenile", "youth"]
+                kw in " ".join(plan).lower() + " " + question.lower()
+                for kw in ["detention", "commitment", "juvenile", "youth", "idjc", "kids", "children", "offender"]
             ):
                 try:
                     # Map to the correct actual tool name
                     commitment_data = await client.execute_tool(
                         "idjc", "get_commitments", {"limit": 1000}
                     )
+                    if isinstance(commitment_data, list):
+                        idjc_data = {"commitments": commitment_data}
+                        count = len(commitment_data)
+                    else:
+                        idjc_data = {"commitments": commitment_data.get("commitments", [])}
+                        count = commitment_data.get('count', 0)
                     traces.append(
-                        f"IDJC commitments: {len(commitment_data.get('commitments', []))} found"
+                        f"IDJC commitments: {count} found"
                     )
                 except Exception as e:
                     errors.append(f"IDJC commitment lookup failed: {e}")
                     logger.error(f"IDJC commitment lookup failed: {e}")
+                    idjc_data = {"commitments": []}
 
-            idjc_data = {"commitments": commitment_data.get("commitments", [])}
+            else:
+                idjc_data = {"commitments": []}
             sources.append("idjc")
 
     except Exception as e:
@@ -195,19 +203,27 @@ async def execute_idoc(state: InsightState) -> dict:
                         inmate_data = await client.execute_tool(
                             "idoc", "get_people_bulk", {"insight_ids": query_params["insight_ids"]}
                         )
-                        # get_people_bulk returns {"results": {...}}
-                        # map it back to what's expected or just put it in there
-                        idoc_data = {"inmates": inmate_data.get("results", {})}
+                        if isinstance(inmate_data, list):
+                            idoc_data = {"inmates": inmate_data}
+                            count = len(inmate_data)
+                        else:
+                            idoc_data = {"inmates": inmate_data.get("results", {})}
+                            count = inmate_data.get('count', 0)
                         traces.append(
-                            f"IDOC cross-agency match: {inmate_data.get('count', 0)} people matched"
+                            f"IDOC cross-agency match: {count} people matched"
                         )
                     else:
                         inmate_data = await client.execute_tool(
                             "idoc", "get_active_offenders", {"limit": 1000}
                         )
-                        idoc_data = {"inmates": inmate_data.get("offenders", [])}
+                        if isinstance(inmate_data, list):
+                            idoc_data = {"inmates": inmate_data}
+                            count = len(inmate_data)
+                        else:
+                            idoc_data = {"inmates": inmate_data.get("offenders", [])}
+                            count = inmate_data.get('count', 0)
                         traces.append(
-                            f"IDOC active offenders: {inmate_data.get('count', 0)} found"
+                            f"IDOC active offenders: {count} found"
                         )
                 except Exception as e:
                     errors.append(f"IDOC inmate lookup failed: {e}")

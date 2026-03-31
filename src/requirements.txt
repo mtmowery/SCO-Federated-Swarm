@@ -1,0 +1,47 @@
+# Core Web Framework
+fastapi>=0.104
+uvicorn[standard]>=0.24
+httpx>=0.25
+
+# Database & ORM
+sqlalchemy[asyncio]>=2.0.23
+asyncpg>=0.29
+neo4j>=5.15
+
+# Vector Database
+qdrant-client>=1.7
+
+# Caching & State
+redis[hiredis]>=5.0
+
+# Configuration & Settings
+pydantic>=2.0
+pydantic-settings>=2.1
+python-dotenv>=1.0
+
+# AI & Orchestration
+langchain>=0.1
+langchain-community>=0.0.11
+langchain-ollama>=0.1
+langgraph>=0.0.15
+
+# Data Processing
+pandas>=2.1
+numpy>=1.26
+
+# Protocol & Communication
+mcp>=1.0
+
+# Logging & Monitoring
+loguru>=0.7
+
+# Testing & Development
+pytest>=7.4
+pytest-asyncio>=0.21
+pytest-cov>=4.1
+black>=23.12
+ruff>=0.1
+mypy>=1.7
+
+# Type Stubs
+types-redis>=4.6

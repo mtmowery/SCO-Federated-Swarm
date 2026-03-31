@@ -1,0 +1,226 @@
+###############################################################################
+# Idaho Federated AI Swarm - Docker Compose
+#
+# SELF-CONTAINED stack — completely separate from any other project.
+# All ports are offset to avoid collisions with existing services.
+#
+# Databases:
+#   - PostgreSQL 16: fed_idhw, fed_idjc, fed_idoc  (port 5434)
+#   - Neo4j 5:       default database               (bolt 7688, browser 7475)
+#   - Qdrant:        collections at runtime          (REST 6335, gRPC 6336)
+#   - Redis 7:       db 0                            (port 6381)
+#   - Ollama:        standalone on host              (localhost:11434)
+#
+# Usage:
+#   docker compose up -d                     # Start all infrastructure
+#   python3 main.py load-all                 # Load CSV → PG → Neo4j
+#   python3 main.py query "..."              # Query the swarm
+#   docker compose down                      # Stop everything
+#   docker compose down -v                   # Stop + delete all data
+###############################################################################
+
+services:
+  # ── PostgreSQL 16 ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: fed_swarm_postgres
+    environment:
+      POSTGRES_USER: fed_swarm
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-fed_swarm_2026}
+      POSTGRES_DB: postgres
+    volumes:
+      - fed_pgdata:/var/lib/postgresql/data
+      - ./data/init_pg.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fed_swarm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fed_swarm_net
+
+  # ── Neo4j Community 5.x ──────────────────────────────────────
+  neo4j:
+    image: neo4j:5-community
+    container_name: fed_swarm_neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-fed_swarm_2026}
+      NEO4J_PLUGINS: '[]'
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+    volumes:
+      - fed_neo4jdata:/data
+    ports:
+      - "7475:7474"   # Browser
+      - "7688:7687"   # Bolt
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - fed_swarm_net
+
+  # ── Qdrant (Vector DB) ───────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: fed_swarm_qdrant
+    volumes:
+      - fed_qdrantdata:/qdrant/storage
+    ports:
+      - "6335:6333"   # REST API
+      - "6336:6334"   # gRPC
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fed_swarm_net
+
+  # ── Redis 7 ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: fed_swarm_redis
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - fed_redisdata:/data
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fed_swarm_net
+
+  # ── Ollama runs standalone on host (not in Docker) ────────────
+  # Containers reach it via host.docker.internal:11434
+  # Local dev reaches it via localhost:11434
+
+  # ── IDHW Agency Agent ────────────────────────────────────────
+  idhw-agent:
+    build:
+      context: .
+      dockerfile: agents/idhw/Dockerfile
+    container_name: fed_swarm_idhw
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: fed_swarm
+      PG_PASSWORD: fed_swarm_2026
+      PG_IDHW_DATABASE: fed_idhw
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    networks:
+      - fed_swarm_net
+
+  # ── IDJC Agency Agent ────────────────────────────────────────
+  idjc-agent:
+    build:
+      context: .
+      dockerfile: agents/idjc/Dockerfile
+    container_name: fed_swarm_idjc
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: fed_swarm
+      PG_PASSWORD: fed_swarm_2026
+      PG_IDJC_DATABASE: fed_idjc
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+    networks:
+      - fed_swarm_net
+
+  # ── IDOC Agency Agent ────────────────────────────────────────
+  idoc-agent:
+    build:
+      context: .
+      dockerfile: agents/idoc/Dockerfile
+    container_name: fed_swarm_idoc
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: fed_swarm
+      PG_PASSWORD: fed_swarm_2026
+      PG_IDOC_DATABASE: fed_idoc
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8003:8000"
+    networks:
+      - fed_swarm_net
+
+  # ── Controller (LangGraph Orchestrator) ──────────────────────
+  controller:
+    build:
+      context: .
+      dockerfile: controller/Dockerfile
+    container_name: fed_swarm_controller
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: fed_swarm
+      PG_PASSWORD: fed_swarm_2026
+      NEO4J_BOLT_URI: bolt://neo4j:7687
+      NEO4J_PASSWORD: fed_swarm_2026
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      MCP_IDHW_HOST: idhw-agent
+      MCP_IDJC_HOST: idjc-agent
+      MCP_IDOC_HOST: idoc-agent
+    depends_on:
+      - idhw-agent
+      - idjc-agent
+      - idoc-agent
+      - neo4j
+      - redis
+      - qdrant
+    ports:
+      - "8000:8000"
+    networks:
+      - fed_swarm_net
+
+volumes:
+  fed_pgdata:
+  fed_neo4jdata:
+  fed_qdrantdata:
+  fed_redisdata:
+
+networks:
+  fed_swarm_net:
+    driver: bridge
+    name: fed_swarm_network

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool, QueuePool
 from neo4j import AsyncDriver, AsyncGraphDatabase
 from neo4j.exceptions import ServiceUnavailable
-from qdrant_client.async_client import AsyncQdrantClient
+from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis, ConnectionPool
 
 from .config import settings
@@ -81,7 +81,6 @@ class DatabaseManager:
         engine = create_async_engine(
             url,
             echo=settings.debug,
-            pool_class=QueuePool,
             pool_size=settings.postgres.pool_size,
             max_overflow=settings.postgres.max_overflow,
             pool_timeout=settings.postgres.pool_timeout,

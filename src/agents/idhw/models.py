@@ -32,10 +32,8 @@ class IDHWPerson(Base):
 
     __tablename__ = "idhw_persons"
 
-    # Primary identifiers
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     insight_id: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True
+        String(255), primary_key=True, index=True
     )
 
     # Family relationship insight_ids (foreign keys to other records)
@@ -85,7 +83,7 @@ class IDHWPerson(Base):
     )  # Termination of Parental Rights
     death_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     deceased_before_removal: Mapped[Optional[bool]] = mapped_column(
-        Boolean, nullable=True
+        "deceasead_before_removal", Boolean, nullable=True
     )
 
     # Incarceration status
@@ -103,13 +101,7 @@ class IDHWPerson(Base):
     # Data quality
     errors: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
-    # Audit timestamps
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    # No audit timestamps in CSV
 
     # Composite indexes for common queries
     __table_args__ = (
@@ -124,9 +116,7 @@ class IDHWPerson(Base):
     )
 
     def to_dict(self) -> dict:
-        """Convert model to dictionary for JSON serialization."""
         return {
-            "id": self.id,
             "insight_id": self.insight_id,
             "child_insight_id": self.child_insight_id,
             "mother_insight_id": self.mother_insight_id,
@@ -139,24 +129,18 @@ class IDHWPerson(Base):
             "first_name": self.first_name,
             "middle_name": self.middle_name,
             "last_name": self.last_name,
-            "dob": self.dob.isoformat() if self.dob else None,
+            "dob": self.dob.isoformat() if hasattr(self.dob, 'isoformat') else self.dob,
             "ssn": self.ssn,
             "gender": self.gender,
-            "start_care_date": self.start_care_date.isoformat()
-            if self.start_care_date
-            else None,
-            "end_care_date": self.end_care_date.isoformat()
-            if self.end_care_date
-            else None,
+            "start_care_date": self.start_care_date.isoformat() if hasattr(self.start_care_date, 'isoformat') else self.start_care_date,
+            "end_care_date": self.end_care_date.isoformat() if hasattr(self.end_care_date, 'isoformat') else self.end_care_date,
             "end_reason": self.end_reason,
-            "tpr_date": self.tpr_date.isoformat() if self.tpr_date else None,
-            "death_date": self.death_date.isoformat() if self.death_date else None,
+            "tpr_date": self.tpr_date.isoformat() if hasattr(self.tpr_date, 'isoformat') else self.tpr_date,
+            "death_date": self.death_date.isoformat() if hasattr(self.death_date, 'isoformat') else self.death_date,
             "deceased_before_removal": self.deceased_before_removal,
             "incarcerated_at_removal": self.incarcerated_at_removal,
             "father_not_in_home": self.father_not_in_home,
             "dob_month": self.dob_month,
             "dob_year": self.dob_year,
             "errors": self.errors,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
         }

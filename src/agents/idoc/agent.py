@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from datetime import datetime
 from typing import Any, Optional
 
-from src.shared.schemas import (
+from shared.schemas import (
     AgentResponse,
     ResponseStatus,
     QueryType,

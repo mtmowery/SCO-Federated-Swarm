@@ -185,13 +185,25 @@ async def execute_tool(request: ExecuteRequest) -> ExecuteResponse:
 
         logger.info(f"Executing tool: {tool_name} with args: {arguments}")
 
-        # Get tool from MCP server
-        if not hasattr(mcp, "tools") or tool_name not in mcp.tools:
+        from . import db
+
+        direct_tools = {
+            "get_commitments": db.get_all_commitments,
+            "get_person": db.get_person_by_insight_id,
+            "get_people_bulk": db.get_people_by_insight_ids,
+            "get_active_commitments": db.get_active_commitments,
+            "check_juvenile_record": db.check_juvenile_record,
+            "get_offense_summary": db.get_offense_summary,
+            "count_by_status": db.count_by_status,
+            "search_commitments": db.search_commitments,
+        }
+
+        if tool_name not in direct_tools:
             raise HTTPException(
                 status_code=404, detail=f"Tool not found: {tool_name}"
             )
 
-        tool_func = mcp.tools[tool_name]
+        tool_func = direct_tools[tool_name]
 
         # Execute tool with arguments
         result = await tool_func(**arguments)
@@ -234,11 +246,13 @@ async def root():
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
 
+    port = int(os.environ.get("MCP_IDJC_PORT", settings.mcp.idjc_port))
     uvicorn.run(
         app,
-        host=settings.mcp.idjc_host,
-        port=settings.mcp.idjc_port,
+        host="0.0.0.0",
+        port=port,
         log_level="info",
     )

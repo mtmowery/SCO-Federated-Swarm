@@ -10,7 +10,7 @@ from typing import Any, Optional
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.shared.database import get_pg_session
+from shared.database import get_pg_session
 from .models import IDOCSentence
 
 logger = logging.getLogger(__name__)

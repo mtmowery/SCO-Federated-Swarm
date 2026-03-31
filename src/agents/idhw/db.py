@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..shared.database import get_pg_session
+from shared.database import get_pg_session
 from .models import IDHWPerson
 
 logger = logging.getLogger(__name__)
@@ -189,7 +189,7 @@ async def count_children_by_end_reason() -> dict[str, int]:
 
     async with session_maker() as session:
         stmt = (
-            select(IDHWPerson.end_reason, func.count(IDHWPerson.id))
+            select(IDHWPerson.end_reason, func.count(IDHWPerson.insight_id))
             .where(IDHWPerson.person_type == "child")
             .group_by(IDHWPerson.end_reason)
         )
@@ -311,19 +311,19 @@ async def get_stats() -> dict[str, Any]:
 
     async with session_maker() as session:
         # Total records
-        total_stmt = select(func.count(IDHWPerson.id))
+        total_stmt = select(func.count(IDHWPerson.insight_id))
         total = await session.execute(total_stmt)
         total_count = total.scalar() or 0
 
         # Children count
-        children_stmt = select(func.count(IDHWPerson.id)).where(
+        children_stmt = select(func.count(IDHWPerson.insight_id)).where(
             IDHWPerson.person_type == "child"
         )
         children = await session.execute(children_stmt)
         children_count = children.scalar() or 0
 
         # Foster children count
-        foster_stmt = select(func.count(IDHWPerson.id)).where(
+        foster_stmt = select(func.count(IDHWPerson.insight_id)).where(
             and_(
                 IDHWPerson.person_type == "child",
                 IDHWPerson.start_care_date.isnot(None),
@@ -333,14 +333,14 @@ async def get_stats() -> dict[str, Any]:
         foster_count = foster.scalar() or 0
 
         # TPR count
-        tpr_stmt = select(func.count(IDHWPerson.id)).where(
+        tpr_stmt = select(func.count(IDHWPerson.insight_id)).where(
             IDHWPerson.tpr_date.isnot(None)
         )
         tpr = await session.execute(tpr_stmt)
         tpr_count = tpr.scalar() or 0
 
         # Death count
-        death_stmt = select(func.count(IDHWPerson.id)).where(
+        death_stmt = select(func.count(IDHWPerson.insight_id)).where(
             IDHWPerson.death_date.isnot(None)
         )
         death = await session.execute(death_stmt)

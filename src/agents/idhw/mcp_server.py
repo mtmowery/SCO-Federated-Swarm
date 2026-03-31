@@ -12,8 +12,8 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from ..shared.schemas import AgencyCapability, QueryType
-from ..shared.config import settings
+from shared.schemas import AgencyCapability, QueryType
+from shared.config import settings
 from .tools import mcp
 from . import db
 
@@ -248,6 +248,6 @@ def run_server(host: str = "0.0.0.0", port: int = 8001, reload: bool = False):
 
 
 if __name__ == "__main__":
-    # Get port from config
-    port = settings.mcp.idhw_port
-    run_server(port=port)
+    import os
+    port = int(os.environ.get("MCP_IDHW_PORT", settings.mcp.idhw_port))
+    run_server(host="0.0.0.0", port=port)

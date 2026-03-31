@@ -14,6 +14,7 @@ COPY agents/__init__.py ./agents/
 COPY agents/idjc/ ./agents/idjc/
 COPY prompts/idjc_agent.txt ./prompts/
 
-EXPOSE 8002
+ENV MCP_IDJC_PORT=8000
+EXPOSE 8000
 
 CMD ["python", "-m", "agents.idjc.mcp_server"]

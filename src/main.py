@@ -144,6 +144,61 @@ def cmd_query(args: argparse.Namespace) -> None:
         print(f"Execution time: {result.get('execution_time_ms', 0)}ms")
 
 
+# ── Direct Graph Query (bypasses MCP agents, hits Neo4j directly) ────────────
+
+async def _graph_query(question: str) -> dict:
+    """Route question to the right Neo4j Cypher query."""
+    from memory.graph_memory import GraphMemory
+
+    graph = GraphMemory()
+    await graph.connect()
+
+    try:
+        q = question.lower()
+
+        # Route to the appropriate materialized query
+        if ("foster" in q and "incarcerat" in q and "parent" in q) or \
+           ("children" in q and "incarcerat" in q):
+            result = await graph.count_foster_children_with_incarcerated_parents()
+
+        elif "incarcerat" in q and "foster" in q and ("children" not in q or "have foster" in q):
+            result = await graph.count_incarcerated_with_foster_children()
+
+        elif "juvenile" in q and ("foster" in q or "youth" in q):
+            result = await graph.count_foster_youth_with_juvenile_record()
+
+        elif "stats" in q or "statistics" in q or "overview" in q:
+            result = await graph.get_graph_stats()
+
+        elif "family" in q and "network" in q:
+            # Try to extract an insight_id from the question
+            import re
+            ids = re.findall(r'\b[A-Z0-9]{6,}\b', question)
+            if ids:
+                result = await graph.get_family_network(ids[0])
+            else:
+                result = {"error": "Provide an insight_id for family network lookup"}
+
+        else:
+            # Run all cross-agency counts as a summary
+            r1 = await graph.count_foster_children_with_incarcerated_parents()
+            r2 = await graph.count_incarcerated_with_foster_children()
+            r3 = await graph.count_foster_youth_with_juvenile_record()
+            stats = await graph.get_graph_stats()
+            result = {**r1, **r2, **r3, "graph": stats}
+
+        return result
+
+    finally:
+        await graph.close()
+
+
+def cmd_graph_query(args: argparse.Namespace) -> None:
+    """Run a query directly against the Neo4j knowledge graph."""
+    result = asyncio.run(_graph_query(args.question))
+    print(json.dumps(result, indent=2, default=str))
+
+
 # ── Health Check ─────────────────────────────────────────────────────────────
 
 async def _health_check() -> dict:
@@ -235,6 +290,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("question", help="Natural language question")
     p_query.add_argument("--json", action="store_true", help="Output as JSON")
     p_query.set_defaults(func=cmd_query)
+
+    # graph-query (direct Neo4j — no MCP agents needed)
+    p_gq = sub.add_parser("graph-query", help="Query Neo4j graph directly (no agents needed)")
+    p_gq.add_argument("question", help="Natural language question")
+    p_gq.set_defaults(func=cmd_graph_query)
 
     # health
     p_health = sub.add_parser("health", help="Check all service health")

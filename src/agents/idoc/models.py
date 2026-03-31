@@ -81,13 +81,7 @@ class IDOCSentence(Base):
     mitt_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     sent_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
 
-    # Audit fields
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    # No audit fields in CSV
 
     def __repr__(self) -> str:
         """Return string representation of sentence record."""
@@ -105,7 +99,7 @@ class IDOCSentence(Base):
             "fnam": self.fnam,
             "lnam": self.lnam,
             "mnam": self.mnam,
-            "dob_dtd": self.dob_dtd.isoformat() if self.dob_dtd else None,
+            "dob_dtd": self.dob_dtd.isoformat() if hasattr(self.dob_dtd, 'isoformat') else self.dob_dtd,
             "sex_cd": self.sex_cd,
             "ssn_nbr": self.ssn_nbr,
             "incrno": self.incrno,
@@ -114,16 +108,14 @@ class IDOCSentence(Base):
             "caseno_seq": self.caseno_seq,
             "state": self.state,
             "cnty_sdesc": self.cnty_sdesc,
-            "sent_beg_dtd": self.sent_beg_dtd.isoformat() if self.sent_beg_dtd else None,
-            "sent_eff_dtd": self.sent_eff_dtd.isoformat() if self.sent_eff_dtd else None,
-            "sent_ft_dtd": self.sent_ft_dtd.isoformat() if self.sent_ft_dtd else None,
+            "sent_beg_dtd": self.sent_beg_dtd.isoformat() if hasattr(self.sent_beg_dtd, 'isoformat') else self.sent_beg_dtd,
+            "sent_eff_dtd": self.sent_eff_dtd.isoformat() if hasattr(self.sent_eff_dtd, 'isoformat') else self.sent_eff_dtd,
+            "sent_ft_dtd": self.sent_ft_dtd.isoformat() if hasattr(self.sent_ft_dtd, 'isoformat') else self.sent_ft_dtd,
             "consec_typ": self.consec_typ,
             "off_ldesc": self.off_ldesc,
             "crm_grp_desc": self.crm_grp_desc,
             "mitt_status": self.mitt_status,
             "sent_status": self.sent_status,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
         }
 
 

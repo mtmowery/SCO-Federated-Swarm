@@ -7,14 +7,14 @@ Tools are auto-discoverable by agents for natural language tool calling.
 
 import logging
 from typing import Any
-from fastmcp import Server
+from fastmcp import FastMCP
 
 from . import db
 
 logger = logging.getLogger(__name__)
 
 # Initialize MCP server for IDOC
-mcp = Server("idoc")
+mcp = FastMCP("idoc")
 
 
 @mcp.tool()

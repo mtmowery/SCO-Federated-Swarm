@@ -51,7 +51,7 @@ async def execute_idhw(state: InsightState) -> dict:
             if any("family" in step.lower() or "relationship" in step.lower() for step in plan):
                 try:
                     family_data = await client.execute_tool(
-                        "idhw", "lookup_family_relationships", query_params,
+                        "idhw", "get_family_relationships", {}
                     )
                     traces.append(
                         f"IDHW family relationships: {len(family_data.get('relationships', []))} found"
@@ -64,7 +64,7 @@ async def execute_idhw(state: InsightState) -> dict:
             if any("child" in step.lower() for step in plan):
                 try:
                     child_data = await client.execute_tool(
-                        "idhw", "lookup_child", query_params,
+                        "idhw", "get_children", {}
                     )
                     traces.append(
                         f"IDHW child records: {len(child_data.get('children', []))} found"
@@ -127,8 +127,9 @@ async def execute_idjc(state: InsightState) -> dict:
                 for kw in ["detention", "commitment", "juvenile", "youth"]
             ):
                 try:
+                    # Map to the correct actual tool name
                     commitment_data = await client.execute_tool(
-                        "idjc", "lookup_commitment", query_params,
+                        "idjc", "get_commitments", {"limit": 1000}
                     )
                     traces.append(
                         f"IDJC commitments: {len(commitment_data.get('commitments', []))} found"
@@ -189,17 +190,31 @@ async def execute_idoc(state: InsightState) -> dict:
                 for kw in ["inmate", "incarcerat", "prison", "offender"]
             ):
                 try:
-                    inmate_data = await client.execute_tool(
-                        "idoc", "lookup_inmate", query_params,
-                    )
-                    traces.append(
-                        f"IDOC inmates: {len(inmate_data.get('inmates', []))} found"
-                    )
+                    if "insight_ids" in query_params and query_params["insight_ids"]:
+                        # We have specific parent IDs to check
+                        inmate_data = await client.execute_tool(
+                            "idoc", "get_people_bulk", {"insight_ids": query_params["insight_ids"]}
+                        )
+                        # get_people_bulk returns {"results": {...}}
+                        # map it back to what's expected or just put it in there
+                        idoc_data = {"inmates": inmate_data.get("results", {})}
+                        traces.append(
+                            f"IDOC cross-agency match: {inmate_data.get('count', 0)} people matched"
+                        )
+                    else:
+                        inmate_data = await client.execute_tool(
+                            "idoc", "get_active_offenders", {"limit": 1000}
+                        )
+                        idoc_data = {"inmates": inmate_data.get("offenders", [])}
+                        traces.append(
+                            f"IDOC active offenders: {inmate_data.get('count', 0)} found"
+                        )
                 except Exception as e:
                     errors.append(f"IDOC inmate lookup failed: {e}")
                     logger.error(f"IDOC inmate lookup failed: {e}")
-
-            idoc_data = {"inmates": inmate_data.get("inmates", [])}
+                    idoc_data = {"inmates": []}
+            else:
+                idoc_data = {"inmates": []}
             sources.append("idoc")
 
     except Exception as e:

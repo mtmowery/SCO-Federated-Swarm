@@ -14,6 +14,7 @@ COPY agents/__init__.py ./agents/
 COPY agents/idoc/ ./agents/idoc/
 COPY prompts/idoc_agent.txt ./prompts/
 
-EXPOSE 8003
+ENV MCP_IDOC_PORT=8000
+EXPOSE 8000
 
 CMD ["python", "-m", "agents.idoc.mcp_server"]

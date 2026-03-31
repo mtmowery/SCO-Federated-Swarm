@@ -249,14 +249,24 @@ class MCPClient:
             raise RuntimeError(f"Circuit breaker open for {agency}")
 
         try:
-            url = f"{self.endpoints[agency]}/tools/{tool_name}"
+            url = f"{self.endpoints[agency]}/execute"
+            payload = {
+                "tool_name": tool_name,
+                "parameters": arguments,
+                "arguments": arguments,
+                "params": arguments
+            }
             response = await self._make_request(
                 "POST",
                 url,
-                json=arguments,
+                json=payload,
             )
             self._record_success(agency)
-            return response.json()
+            data = response.json()
+            if not data.get("success", False):
+                logger.error(f"Tool execution returned error: {data.get('error')}")
+                raise ValueError(data.get("error", "Unknown execution error"))
+            return data.get("result", {})
         except Exception as e:
             self._record_failure(agency)
             logger.error(f"Failed to execute tool {tool_name} on {agency}: {e}")

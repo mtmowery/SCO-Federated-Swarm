@@ -17,6 +17,7 @@ COPY agents/__init__.py ./agents/
 COPY agents/idhw/ ./agents/idhw/
 COPY prompts/idhw_agent.txt ./prompts/
 
-EXPOSE 8001
+ENV MCP_IDHW_PORT=8000
+EXPOSE 8000
 
 CMD ["python", "-m", "agents.idhw.mcp_server"]

@@ -12,8 +12,8 @@ from uuid import uuid4
 
 import httpx
 
-from ..shared.schemas import AgentResponse, Provenance, ResponseStatus, QueryType, AgencyName
-from ..shared.config import settings
+from shared.schemas import AgentResponse, Provenance, ResponseStatus, QueryType, AgencyName
+from shared.config import settings
 from . import db
 
 logger = logging.getLogger(__name__)

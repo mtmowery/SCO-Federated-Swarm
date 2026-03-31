@@ -12,8 +12,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from src.shared.config import settings
-from src.shared.database import DatabaseManager, close_all_connections
+from shared.config import settings
+from shared.database import DatabaseManager, close_all_connections
 from .tools import mcp
 
 logger = logging.getLogger(__name__)
@@ -166,18 +166,7 @@ async def execute_tool(request: ExecuteRequest) -> dict:
     """
     logger.info(f"Executing tool: {request.tool_name} with params: {request.params}")
 
-    # Map tool names to MCP tool functions
-    tool_map = {
-        "get_sentences": mcp.tools[0].func if mcp.tools else None,
-        "get_person": mcp.tools[1].func if len(mcp.tools) > 1 else None,
-        "get_people_bulk": mcp.tools[2].func if len(mcp.tools) > 2 else None,
-        "check_incarceration": mcp.tools[3].func if len(mcp.tools) > 3 else None,
-        "count_incarcerated": mcp.tools[4].func if len(mcp.tools) > 4 else None,
-        "get_active_offenders": mcp.tools[5].func if len(mcp.tools) > 5 else None,
-        "get_offense_summary": mcp.tools[6].func if len(mcp.tools) > 6 else None,
-        "count_by_status": mcp.tools[7].func if len(mcp.tools) > 7 else None,
-        "search_sentences": mcp.tools[8].func if len(mcp.tools) > 8 else None,
-    }
+    # Removed broken mcp.tools extraction
 
     # Import the functions directly to avoid complex MCP reflection
     from . import db
@@ -265,13 +254,13 @@ async def root() -> dict:
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
 
-    config = settings.mcp
-
+    port = int(os.environ.get("MCP_IDOC_PORT", settings.mcp.idoc_port))
     uvicorn.run(
         app,
-        host=config.idoc_host,
-        port=config.idoc_port,
+        host="0.0.0.0",
+        port=port,
         log_level="info",
     )

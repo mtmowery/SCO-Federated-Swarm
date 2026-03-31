@@ -108,9 +108,8 @@ class GraphMemory:
                 # Upsert person node
                 await session.run(
                     f"MERGE (p{labels} {{insight_id: $insight_id}}) "
-                    "SET p.first_name = $first_name, "
-                    "    p.last_name = $last_name, "
-                    "    p.dob = $dob, "
+                    "SET p.dob_month = $dob_month, "
+                    "    p.dob_year = $dob_year, "
                     "    p.gender = $gender, "
                     "    p.person_type = $person_type, "
                     "    p.agency_source = 'IDHW', "
@@ -118,9 +117,8 @@ class GraphMemory:
                     "    p.end_care_date = $end_care_date, "
                     "    p.end_reason = $end_reason",
                     insight_id=insight_id,
-                    first_name=record.get("first_name"),
-                    last_name=record.get("last_name"),
-                    dob=record.get("dob"),
+                    dob_month=record.get("dob_month"),
+                    dob_year=record.get("dob_year"),
                     gender=record.get("gender"),
                     person_type=person_type,
                     start_care_date=record.get("start_care_date"),
@@ -172,9 +170,15 @@ class GraphMemory:
                 # Upsert person node
                 await session.run(
                     "MERGE (p:Person {insight_id: $insight_id}) "
-                    "SET p.agency_source = CASE WHEN p.agency_source IS NULL "
+                    "SET p.gender = COALESCE(p.gender, $gender), "
+                    "    p.dob_month = COALESCE(p.dob_month, $dob_month), "
+                    "    p.dob_year = COALESCE(p.dob_year, $dob_year), "
+                    "    p.agency_source = CASE WHEN p.agency_source IS NULL "
                     "    THEN 'IDOC' ELSE p.agency_source + ',IDOC' END",
                     insight_id=insight_id,
+                    gender=record.get("gender"),
+                    dob_month=record.get("dob_month"),
+                    dob_year=record.get("dob_year"),
                 )
 
                 # Create sentence node
@@ -216,9 +220,15 @@ class GraphMemory:
 
                 await session.run(
                     "MERGE (p:Person {insight_id: $insight_id}) "
-                    "SET p.agency_source = CASE WHEN p.agency_source IS NULL "
+                    "SET p.gender = COALESCE(p.gender, $gender), "
+                    "    p.dob_month = COALESCE(p.dob_month, $dob_month), "
+                    "    p.dob_year = COALESCE(p.dob_year, $dob_year), "
+                    "    p.agency_source = CASE WHEN p.agency_source IS NULL "
                     "    THEN 'IDJC' ELSE p.agency_source + ',IDJC' END",
                     insight_id=insight_id,
+                    gender=record.get("gender"),
+                    dob_month=record.get("dob_month"),
+                    dob_year=record.get("dob_year"),
                 )
 
                 await session.run(

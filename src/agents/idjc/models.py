@@ -35,43 +35,32 @@ class IDJCCommitment(Base):
 
     # Identity columns
     insight_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    ijos_id: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
-
-    # Personal information
-    last_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    first_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    middle_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     # Demographic data
-    dob: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    gender: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
-    ssn: Mapped[Optional[str]] = mapped_column(String(11), nullable=True)
+    dob_month: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    dob_year: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    gender: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     # Commitment information
-    date_of_commitment: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    date_of_release: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    date_of_commitment: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    date_of_release: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     committing_county: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # Offense information
     offense_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     statute_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    offense_description: Mapped[Optional[Text]] = mapped_column(Text, nullable=True)
+    offense_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     offense_category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
-    offense_level: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
-    significance_level: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    offense_level: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, index=True)
+    significance_level: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
 
     # Status tracking
-    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True, default="Active")
-
-    # Audit columns removed because they do not exist in the database schema.
-
+    status: Mapped[str] = mapped_column(String(50), nullable=False, index=True, default="Active")
 
     def __repr__(self) -> str:
         return (
             f"<IDJCCommitment("
             f"insight_id={self.insight_id}, "
-            f"ijos_id={self.ijos_id}, "
-            f"name={self.first_name} {self.last_name}, "
             f"status={self.status}"
             f")>"
         )
@@ -81,15 +70,11 @@ class IDJCCommitment(Base):
         return {
             "id": self.id,
             "insight_id": self.insight_id,
-            "ijos_id": self.ijos_id,
-            "last_name": self.last_name,
-            "first_name": self.first_name,
-            "middle_name": self.middle_name,
-            "dob": self.dob.isoformat() if hasattr(self.dob, 'isoformat') else self.dob,
+            "dob_month": self.dob_month,
+            "dob_year": self.dob_year,
             "gender": self.gender,
-            "ssn": self.ssn,
-            "date_of_commitment": self.date_of_commitment.isoformat() if hasattr(self.date_of_commitment, 'isoformat') else self.date_of_commitment,
-            "date_of_release": self.date_of_release.isoformat() if hasattr(self.date_of_release, 'isoformat') else self.date_of_release,
+            "date_of_commitment": self.date_of_commitment,
+            "date_of_release": self.date_of_release,
             "committing_county": self.committing_county,
             "offense_number": self.offense_number,
             "statute_code": self.statute_code,
@@ -99,7 +84,6 @@ class IDJCCommitment(Base):
             "significance_level": self.significance_level,
             "status": self.status,
         }
-
 
 # Define composite indexes for common query patterns
 __table_args__ = (

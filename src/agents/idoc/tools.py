@@ -186,14 +186,10 @@ async def search_sentences(filters: dict[str, Any]) -> dict[str, Any]:
 
     Supported filters:
     - insight_id: Cross-agency person ID
-    - ofndr_num: IDOC offender number
-    - fnam: First name (substring, case-insensitive)
-    - lnam: Last name (substring, case-insensitive)
     - crm_grp_desc: Crime group description
     - sent_status: Sentence status (e.g., ACTIVE, DISCHARGED)
     - mitt_status: Mittimus status
     - cnty_sdesc: County description (substring, case-insensitive)
-    - sex_cd: Sex code
     - date_from: Sentence start date from (YYYY-MM-DD)
     - date_to: Sentence start date to (YYYY-MM-DD)
 

@@ -217,14 +217,10 @@ async def search_sentences(filters: dict[str, Any]) -> list[dict]:
 
     Supported filters:
     - insight_id: str - exact match
-    - ofndr_num: str - exact match
-    - lnam: str - case-insensitive substring
-    - fnam: str - case-insensitive substring
     - crm_grp_desc: str - exact match
     - sent_status: str - exact match
     - mitt_status: str - exact match
     - cnty_sdesc: str - case-insensitive substring
-    - sex_cd: str - exact match
     - date_from: str (YYYY-MM-DD) - sent_beg_dtd >= date
     - date_to: str (YYYY-MM-DD) - sent_beg_dtd <= date
 
@@ -243,9 +239,6 @@ async def search_sentences(filters: dict[str, Any]) -> list[dict]:
         if "insight_id" in filters:
             conditions.append(IDOCSentence.insight_id == filters["insight_id"])
 
-        if "ofndr_num" in filters:
-            conditions.append(IDOCSentence.ofndr_num == filters["ofndr_num"])
-
         if "crm_grp_desc" in filters:
             conditions.append(IDOCSentence.crm_grp_desc == filters["crm_grp_desc"])
 
@@ -255,31 +248,16 @@ async def search_sentences(filters: dict[str, Any]) -> list[dict]:
         if "mitt_status" in filters:
             conditions.append(IDOCSentence.mitt_status == filters["mitt_status"])
 
-        if "sex_cd" in filters:
-            conditions.append(IDOCSentence.sex_cd == filters["sex_cd"])
-
         # Case-insensitive substring filters
-        if "lnam" in filters:
-            conditions.append(IDOCSentence.lnam.ilike(f"%{filters['lnam']}%"))
-
-        if "fnam" in filters:
-            conditions.append(IDOCSentence.fnam.ilike(f"%{filters['fnam']}%"))
-
         if "cnty_sdesc" in filters:
             conditions.append(IDOCSentence.cnty_sdesc.ilike(f"%{filters['cnty_sdesc']}%"))
 
-        # Date range filters
+        # Date range filters (string comparison works for YYYY-MM-DD)
         if "date_from" in filters:
-            from datetime import datetime
-
-            date_from = datetime.fromisoformat(filters["date_from"]).date()
-            conditions.append(IDOCSentence.sent_beg_dtd >= date_from)
+            conditions.append(IDOCSentence.sent_beg_dtd >= filters["date_from"])
 
         if "date_to" in filters:
-            from datetime import datetime
-
-            date_to = datetime.fromisoformat(filters["date_to"]).date()
-            conditions.append(IDOCSentence.sent_beg_dtd <= date_to)
+            conditions.append(IDOCSentence.sent_beg_dtd <= filters["date_to"])
 
         # Build query
         stmt = select(IDOCSentence)

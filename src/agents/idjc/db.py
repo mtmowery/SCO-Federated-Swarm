@@ -209,18 +209,12 @@ async def search_commitments(filters: dict[str, Any]) -> list[dict[str, Any]]:
 
     Supported filters:
     - insight_id: str
-    - ijos_id: str
-    - first_name: str (substring match)
-    - last_name: str (substring match)
-    - ssn: str
     - status: str
     - offense_category: str
     - offense_level: str
     - committing_county: str
-    - dob_start: date
-    - dob_end: date
-    - commitment_start: date
-    - commitment_end: date
+    - commitment_start: str
+    - commitment_end: str
     - significance_level: str
     - limit: int (default 1000)
     - offset: int (default 0)
@@ -240,22 +234,6 @@ async def search_commitments(filters: dict[str, Any]) -> list[dict[str, Any]]:
 
         if "insight_id" in filters:
             conditions.append(IDJCCommitment.insight_id == filters["insight_id"])
-
-        if "ijos_id" in filters:
-            conditions.append(IDJCCommitment.ijos_id == filters["ijos_id"])
-
-        if "first_name" in filters:
-            conditions.append(
-                IDJCCommitment.first_name.ilike(f"%{filters['first_name']}%")
-            )
-
-        if "last_name" in filters:
-            conditions.append(
-                IDJCCommitment.last_name.ilike(f"%{filters['last_name']}%")
-            )
-
-        if "ssn" in filters:
-            conditions.append(IDJCCommitment.ssn == filters["ssn"])
 
         if "status" in filters:
             conditions.append(IDJCCommitment.status == filters["status"])
@@ -279,37 +257,12 @@ async def search_commitments(filters: dict[str, Any]) -> list[dict[str, Any]]:
             )
 
         # Date range filters
-        if "dob_start" in filters:
-            dob_start = (
-                filters["dob_start"]
-                if isinstance(filters["dob_start"], date)
-                else date.fromisoformat(filters["dob_start"])
-            )
-            conditions.append(IDJCCommitment.dob >= dob_start)
-
-        if "dob_end" in filters:
-            dob_end = (
-                filters["dob_end"]
-                if isinstance(filters["dob_end"], date)
-                else date.fromisoformat(filters["dob_end"])
-            )
-            conditions.append(IDJCCommitment.dob <= dob_end)
 
         if "commitment_start" in filters:
-            commitment_start = (
-                filters["commitment_start"]
-                if isinstance(filters["commitment_start"], date)
-                else date.fromisoformat(filters["commitment_start"])
-            )
-            conditions.append(IDJCCommitment.date_of_commitment >= commitment_start)
+            conditions.append(IDJCCommitment.date_of_commitment >= filters["commitment_start"])
 
         if "commitment_end" in filters:
-            commitment_end = (
-                filters["commitment_end"]
-                if isinstance(filters["commitment_end"], date)
-                else date.fromisoformat(filters["commitment_end"])
-            )
-            conditions.append(IDJCCommitment.date_of_commitment <= commitment_end)
+            conditions.append(IDJCCommitment.date_of_commitment <= filters["commitment_end"])
 
         # Apply all conditions with AND logic
         if conditions:

@@ -135,50 +135,47 @@ async def _match_identities(
     # Extract identifiers from IDOC
     idoc_identifiers = _extract_identifiers_idoc(idoc_data)
 
-    # Match across agencies
-    # Priority: insight_id > SSN > (name + DOB)
+    # Match across agencies using fast set operations
+    # Since identifiers dictionaries use insight_id as keys, we can just intersect the keys
 
-    # IDHW to IDOC matching (parent-child relationship check)
-    for idhw_id, idhw_info in idhw_identifiers.items():
-        for idoc_id, idoc_info in idoc_identifiers.items():
-            # Check if IDOC person matches IDHW parent
-            if _is_identity_match(idhw_info, idoc_info):
-                matches.append({
-                    "insight_id": idoc_id or idhw_id,
-                    "agencies": ["idhw", "idoc"],
-                    "confidence": _calculate_match_confidence(idhw_info, idoc_info),
-                    "idhw_id": idhw_id,
-                    "idoc_id": idoc_id,
-                })
+    # Helper to check if a match already exists
+    def _match_exists(id1, id2, key1, key2):
+        return any(m.get(key1) == id1 and m.get(key2) == id2 for m in matches)
 
-    # IDHW to IDJC matching (child-youth transition)
-    for idhw_id, idhw_info in idhw_identifiers.items():
-        for idjc_id, idjc_info in idjc_identifiers.items():
-            if _is_identity_match(idhw_info, idjc_info):
-                # Check if not already matched
-                if not any(
-                    m["idhw_id"] == idhw_id and m.get("idjc_id") == idjc_id
-                    for m in matches
-                ):
-                    matches.append({
-                        "insight_id": idjc_id or idhw_id,
-                        "agencies": ["idhw", "idjc"],
-                        "confidence": _calculate_match_confidence(idhw_info, idjc_info),
-                        "idhw_id": idhw_id,
-                        "idjc_id": idjc_id,
-                    })
+    # IDHW to IDOC matching
+    idhw_idoc_common = set(idhw_identifiers.keys()).intersection(idoc_identifiers.keys())
+    for insight_id in idhw_idoc_common:
+        matches.append({
+            "insight_id": insight_id,
+            "agencies": ["idhw", "idoc"],
+            "confidence": 1.0,
+            "idhw_id": insight_id,
+            "idoc_id": insight_id,
+        })
 
-    # IDJC to IDOC matching (youth-adult transition)
-    for idjc_id, idjc_info in idjc_identifiers.items():
-        for idoc_id, idoc_info in idoc_identifiers.items():
-            if _is_identity_match(idjc_info, idoc_info):
-                matches.append({
-                    "insight_id": idoc_id or idjc_id,
-                    "agencies": ["idjc", "idoc"],
-                    "confidence": _calculate_match_confidence(idjc_info, idoc_info),
-                    "idjc_id": idjc_id,
-                    "idoc_id": idoc_id,
-                })
+    # IDHW to IDJC matching
+    idhw_idjc_common = set(idhw_identifiers.keys()).intersection(idjc_identifiers.keys())
+    for insight_id in idhw_idjc_common:
+        if not _match_exists(insight_id, insight_id, "idhw_id", "idjc_id"):
+            matches.append({
+                "insight_id": insight_id,
+                "agencies": ["idhw", "idjc"],
+                "confidence": 1.0,
+                "idhw_id": insight_id,
+                "idjc_id": insight_id,
+            })
+
+    # IDJC to IDOC matching
+    idjc_idoc_common = set(idjc_identifiers.keys()).intersection(idoc_identifiers.keys())
+    for insight_id in idjc_idoc_common:
+        if not _match_exists(insight_id, insight_id, "idjc_id", "idoc_id"):
+            matches.append({
+                "insight_id": insight_id,
+                "agencies": ["idjc", "idoc"],
+                "confidence": 1.0,
+                "idjc_id": insight_id,
+                "idoc_id": insight_id,
+            })
 
     return {"matches": matches, "total_matches": len(matches)}
 
@@ -269,36 +266,19 @@ def _is_identity_match(info1: dict[str, Any], info2: dict[str, Any]) -> bool:
     """
     Determine if two identifiers match.
 
-    Uses priority: insight_id > SSN > (name + DOB)
+    Strictly enforces matching using the universal insight_id.
 
     Args:
         info1: First identifier dict
         info2: Second identifier dict
 
     Returns:
-        True if identities match
+        True if identities match exactly on insight_id
     """
-    # Check insight_id match
     id1 = info1.get("insight_id")
     id2 = info2.get("insight_id")
     if id1 and id2 and id1 == id2:
         return True
-
-    # Check SSN match
-    ssn1 = info1.get("ssn")
-    ssn2 = info2.get("ssn")
-    if ssn1 and ssn2 and ssn1 == ssn2:
-        return True
-
-    # Check name + DOB match
-    name1 = (info1.get("name") or "").lower().strip()
-    name2 = (info2.get("name") or "").lower().strip()
-    dob1 = info1.get("dob")
-    dob2 = info2.get("dob")
-
-    if name1 and name2 and dob1 and dob2:
-        if name1 == name2 and dob1 == dob2:
-            return True
 
     return False
 
@@ -312,27 +292,14 @@ def _calculate_match_confidence(info1: dict[str, Any], info2: dict[str, Any]) ->
         info2: Second identifier dict
 
     Returns:
-        Confidence score (0.0 to 1.0)
+        Confidence score (0.0 or 1.0)
     """
     # Perfect match: insight_id
     if info1.get("insight_id") and info2.get("insight_id"):
         if info1.get("insight_id") == info2.get("insight_id"):
             return 1.0
 
-    # Very high confidence: SSN
-    if info1.get("ssn") and info2.get("ssn"):
-        if info1.get("ssn") == info2.get("ssn"):
-            return 0.99
-
-    # High confidence: name + DOB
-    if info1.get("name") and info2.get("name") and info1.get("dob") and info2.get("dob"):
-        if (
-            (info1.get("name") or "").lower() == (info2.get("name") or "").lower()
-            and info1.get("dob") == info2.get("dob")
-        ):
-            return 0.95
-
-    return 0.5
+    return 0.0
 
 
 def _route_to_agency_nodes(state: InsightState) -> list[str]:

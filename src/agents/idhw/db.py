@@ -202,16 +202,15 @@ async def search_people(filters: dict[str, Any]) -> list[dict[str, Any]]:
     """Flexible search with filters on any column.
 
     Supports filtering on:
+    - insight_id
+    - child_insight_id
+    - mother_insight_id
+    - father_insight_id
     - person_type: str
-    - agency_id: str
-    - first_name: str (contains, case-insensitive)
-    - last_name: str (contains, case-insensitive)
-    - dob: datetime or tuple (start, end) for range
-    - start_care_date: datetime or tuple (start, end) for range
-    - end_care_date: datetime or tuple (start, end) for range
     - gender: str
-    - ssn: str (exact match)
     - end_reason: str
+    - start_care_date: str (exact match)
+    - end_care_date: str (exact match)
 
     Args:
         filters: Dictionary of filter criteria
@@ -225,70 +224,32 @@ async def search_people(filters: dict[str, Any]) -> list[dict[str, Any]]:
         conditions = []
 
         # Build dynamic filters
+        if "insight_id" in filters:
+            conditions.append(IDHWPerson.insight_id == filters["insight_id"])
+            
+        if "child_insight_id" in filters:
+            conditions.append(IDHWPerson.child_insight_id == filters["child_insight_id"])
+            
+        if "mother_insight_id" in filters:
+            conditions.append(IDHWPerson.mother_insight_id == filters["mother_insight_id"])
+            
+        if "father_insight_id" in filters:
+            conditions.append(IDHWPerson.father_insight_id == filters["father_insight_id"])
+
         if "person_type" in filters:
             conditions.append(IDHWPerson.person_type == filters["person_type"])
-
-        if "agency_id" in filters:
-            conditions.append(IDHWPerson.agency_id == filters["agency_id"])
-
-        if "first_name" in filters:
-            conditions.append(
-                IDHWPerson.first_name.ilike(f"%{filters['first_name']}%")
-            )
-
-        if "last_name" in filters:
-            conditions.append(
-                IDHWPerson.last_name.ilike(f"%{filters['last_name']}%")
-            )
 
         if "gender" in filters:
             conditions.append(IDHWPerson.gender == filters["gender"])
 
-        if "ssn" in filters:
-            conditions.append(IDHWPerson.ssn == filters["ssn"])
-
         if "end_reason" in filters:
             conditions.append(IDHWPerson.end_reason == filters["end_reason"])
 
-        # Date range filters
-        if "dob" in filters:
-            dob_filter = filters["dob"]
-            if isinstance(dob_filter, tuple) and len(dob_filter) == 2:
-                start, end = dob_filter
-                conditions.append(
-                    and_(
-                        IDHWPerson.dob >= start,
-                        IDHWPerson.dob <= end,
-                    )
-                )
-            elif isinstance(dob_filter, datetime):
-                conditions.append(IDHWPerson.dob == dob_filter)
-
         if "start_care_date" in filters:
-            scd_filter = filters["start_care_date"]
-            if isinstance(scd_filter, tuple) and len(scd_filter) == 2:
-                start, end = scd_filter
-                conditions.append(
-                    and_(
-                        IDHWPerson.start_care_date >= start,
-                        IDHWPerson.start_care_date <= end,
-                    )
-                )
-            elif isinstance(scd_filter, datetime):
-                conditions.append(IDHWPerson.start_care_date == scd_filter)
+            conditions.append(IDHWPerson.start_care_date == filters["start_care_date"])
 
         if "end_care_date" in filters:
-            ecd_filter = filters["end_care_date"]
-            if isinstance(ecd_filter, tuple) and len(ecd_filter) == 2:
-                start, end = ecd_filter
-                conditions.append(
-                    and_(
-                        IDHWPerson.end_care_date >= start,
-                        IDHWPerson.end_care_date <= end,
-                    )
-                )
-            elif isinstance(ecd_filter, datetime):
-                conditions.append(IDHWPerson.end_care_date == ecd_filter)
+            conditions.append(IDHWPerson.end_care_date == filters["end_care_date"])
 
         # Build query
         if conditions:

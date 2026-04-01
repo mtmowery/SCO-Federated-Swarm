@@ -227,17 +227,11 @@ async def count_by_status() -> dict[str, Any]:
 @mcp.tool()
 async def search_commitments(
     insight_id: Optional[str] = None,
-    ijos_id: Optional[str] = None,
-    first_name: Optional[str] = None,
-    last_name: Optional[str] = None,
-    ssn: Optional[str] = None,
     status: Optional[str] = None,
     offense_category: Optional[str] = None,
     offense_level: Optional[str] = None,
     committing_county: Optional[str] = None,
     significance_level: Optional[str] = None,
-    dob_start: Optional[str] = None,
-    dob_end: Optional[str] = None,
     commitment_start: Optional[str] = None,
     commitment_end: Optional[str] = None,
     limit: int = 1000,
@@ -247,23 +241,16 @@ async def search_commitments(
     Search commitments with flexible filtering.
 
     Supports multiple filter criteria combined with AND logic.
-    Dates should be provided in ISO 8601 format (YYYY-MM-DD).
 
     Args:
         insight_id: Filter by insight_id (exact match)
-        ijos_id: Filter by IJOS ID (exact match)
-        first_name: Filter by first name (substring match)
-        last_name: Filter by last name (substring match)
-        ssn: Filter by Social Security Number (exact match)
         status: Filter by commitment status (exact match)
         offense_category: Filter by offense category (exact match)
         offense_level: Filter by offense level (exact match)
         committing_county: Filter by county (exact match)
         significance_level: Filter by significance level (exact match)
-        dob_start: Start date for date of birth range (ISO format)
-        dob_end: End date for date of birth range (ISO format)
-        commitment_start: Start date for commitment date range (ISO format)
-        commitment_end: End date for commitment date range (ISO format)
+        commitment_start: Start date for commitment date range
+        commitment_end: End date for commitment date range
         limit: Maximum number of results (default: 1000)
         offset: Number of results to skip (default: 0)
 
@@ -276,14 +263,6 @@ async def search_commitments(
 
         if insight_id:
             filters["insight_id"] = insight_id
-        if ijos_id:
-            filters["ijos_id"] = ijos_id
-        if first_name:
-            filters["first_name"] = first_name
-        if last_name:
-            filters["last_name"] = last_name
-        if ssn:
-            filters["ssn"] = ssn
         if status:
             filters["status"] = status
         if offense_category:
@@ -294,10 +273,6 @@ async def search_commitments(
             filters["committing_county"] = committing_county
         if significance_level:
             filters["significance_level"] = significance_level
-        if dob_start:
-            filters["dob_start"] = dob_start
-        if dob_end:
-            filters["dob_end"] = dob_end
         if commitment_start:
             filters["commitment_start"] = commitment_start
         if commitment_end:

@@ -130,32 +130,32 @@ async def count_by_end_reason() -> dict[str, Any]:
 
 @mcp.tool()
 async def search_people(
+    insight_id: Optional[str] = None,
+    child_insight_id: Optional[str] = None,
+    mother_insight_id: Optional[str] = None,
+    father_insight_id: Optional[str] = None,
     person_type: Optional[str] = None,
-    agency_id: Optional[str] = None,
-    first_name: Optional[str] = None,
-    last_name: Optional[str] = None,
     gender: Optional[str] = None,
-    ssn: Optional[str] = None,
     end_reason: Optional[str] = None,
 ) -> dict[str, Any]:
     """Search for people using flexible filters.
 
     Can search by:
+    - insight_id: Exact match on universal ID
+    - child_insight_id: Exact match on child ID
+    - mother_insight_id: Exact match on mother ID
+    - father_insight_id: Exact match on father ID
     - person_type: 'child', 'mother', 'father'
-    - agency_id: Agency identifier
-    - first_name: Partial name match (case-insensitive)
-    - last_name: Partial name match (case-insensitive)
     - gender: 'M', 'F', etc.
-    - ssn: Exact SSN match (format: XXX-XX-XXXX)
     - end_reason: Exact end reason match
 
     Args:
+        insight_id: Exact match on global insight ID
+        child_insight_id: Exact match on child insight ID
+        mother_insight_id: Exact match on mother insight ID
+        father_insight_id: Exact match on father insight ID
         person_type: Filter by person type
-        agency_id: Filter by agency
-        first_name: Partial first name match
-        last_name: Partial last name match
         gender: Filter by gender
-        ssn: Filter by social security number
         end_reason: Filter by end reason
 
     Returns:
@@ -163,18 +163,19 @@ async def search_people(
     """
     filters = {}
 
+    if insight_id is not None:
+        filters["insight_id"] = insight_id
+    if child_insight_id is not None:
+        filters["child_insight_id"] = child_insight_id
+    if mother_insight_id is not None:
+        filters["mother_insight_id"] = mother_insight_id
+    if father_insight_id is not None:
+        filters["father_insight_id"] = father_insight_id
+
     if person_type is not None:
         filters["person_type"] = person_type
-    if agency_id is not None:
-        filters["agency_id"] = agency_id
-    if first_name is not None:
-        filters["first_name"] = first_name
-    if last_name is not None:
-        filters["last_name"] = last_name
     if gender is not None:
         filters["gender"] = gender
-    if ssn is not None:
-        filters["ssn"] = ssn
     if end_reason is not None:
         filters["end_reason"] = end_reason
 

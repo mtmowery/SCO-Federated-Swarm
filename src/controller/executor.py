@@ -121,25 +121,43 @@ async def execute_idjc(state: InsightState) -> dict:
             plan = state.get("plan", [])
             query_params = _extract_query_params_idjc(question)
 
+            if AgencyName.IDHW in agencies:
+                child_ids = _extract_child_ids(state.get("idhw_data", {}))
+                if child_ids:
+                    query_params["insight_ids"] = child_ids
+
             commitment_data = {}
             if any(
                 kw in " ".join(plan).lower() + " " + question.lower()
                 for kw in ["detention", "commitment", "juvenile", "youth", "idjc", "kids", "children", "offender"]
             ):
                 try:
-                    # Map to the correct actual tool name
-                    commitment_data = await client.execute_tool(
-                        "idjc", "get_commitments", {"limit": 1000}
-                    )
-                    if isinstance(commitment_data, list):
-                        idjc_data = {"commitments": commitment_data}
-                        count = len(commitment_data)
+                    if "insight_ids" in query_params and query_params["insight_ids"]:
+                        commitment_data = await client.execute_tool(
+                            "idjc", "get_people_bulk", {"insight_ids": query_params["insight_ids"]}
+                        )
+                        if isinstance(commitment_data, list):
+                            idjc_data = {"commitments": commitment_data}
+                            count = len(commitment_data)
+                        else:
+                            idjc_data = {"commitments": commitment_data.get("results", {})}
+                            count = commitment_data.get('count', 0)
+                        traces.append(
+                            f"IDJC cross-agency match: {count} people matched"
+                        )
                     else:
-                        idjc_data = {"commitments": commitment_data.get("commitments", [])}
-                        count = commitment_data.get('count', 0)
-                    traces.append(
-                        f"IDJC commitments: {count} found"
-                    )
+                        commitment_data = await client.execute_tool(
+                            "idjc", "get_commitments", {"limit": 1000}
+                        )
+                        if isinstance(commitment_data, list):
+                            idjc_data = {"commitments": commitment_data}
+                            count = len(commitment_data)
+                        else:
+                            idjc_data = {"commitments": commitment_data.get("commitments", [])}
+                            count = commitment_data.get('count', 0)
+                        traces.append(
+                            f"IDJC commitments: {count} found"
+                        )
                 except Exception as e:
                     errors.append(f"IDJC commitment lookup failed: {e}")
                     logger.error(f"IDJC commitment lookup failed: {e}")
@@ -355,3 +373,27 @@ def _extract_parent_ids(idhw_data: dict[str, Any]) -> list[str]:
 
     # Deduplicate
     return list(set(parent_ids))
+
+
+def _extract_child_ids(idhw_data: dict[str, Any]) -> list[str]:
+    """
+    Extract child insight_ids from IDHW data.
+
+    Used for cross-agency identity matching.
+
+    Args:
+        idhw_data: IDHW query results
+
+    Returns:
+        List of child insight_ids
+    """
+    child_ids = []
+
+    for child in idhw_data.get("child_records", []):
+        if isinstance(child, dict):
+            key = child.get("insight_id") or child.get("child_insight_id")
+            if key:
+                child_ids.append(key)
+
+    # Deduplicate
+    return list(set(child_ids))

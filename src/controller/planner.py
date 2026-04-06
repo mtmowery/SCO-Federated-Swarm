@@ -77,15 +77,22 @@ async def _llm_plan(question: str) -> tuple[QueryIntent, list[str], list[AgencyN
     """
     llm = Ollama(
         base_url=settings.ollama.base_url,
-        model=settings.ollama.default_model,
-        temperature=settings.ollama.temperature,
+        model=settings.ollama.planner_model,
+        temperature=settings.ollama.planner_temperature,
         top_p=settings.ollama.top_p,
     )
 
     prompt = f"""You are a query planner for an Idaho federated AI swarm. Analyze this question and provide:
-1. Intent: one of [cross_agency, single_agency, statistics, lookup]
+1. Intent: one of [cross_agency, single_agency, statistics, lookup, relationship]
 2. Execution plan: step-by-step actions to answer the question
 3. Required agencies: list from [idhw, idjc, idoc]
+
+Agency capabilities:
+- idhw: foster care children, family relationships (child_insight_id, mother_insight_id, father_insight_id), child welfare
+- idjc: juvenile detention records, youth offender history — searches by insight_id
+- idoc: adult prison/incarceration records, offender status — searches by insight_id
+
+IMPORTANT DEPENDENCY RULE: If the question involves children in foster care AND records from idjc or idoc, you MUST list idhw FIRST. idhw must run before idjc/idoc so parent insight_ids can be extracted and passed to those agencies.
 
 Question: {question}
 
@@ -95,12 +102,12 @@ PLAN:
 - <step 1>
 - <step 2>
 - <step 3>
-AGENCIES: <comma-separated list>
+AGENCIES: <comma-separated list, idhw always first if present>
 
 Be concise. Think about what agencies would have relevant data."""
 
     try:
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         return _parse_plan_response(response)
     except Exception as e:
         raise PlanningFailure(f"LLM invocation failed: {e}")

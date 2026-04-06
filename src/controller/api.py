@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from controller.graph import build_graph, run_query
+from controller.graph import build_graph, get_graph, run_query
+from controller.mcp_client import MCPClient
 from security.audit import AuditLogger, PolicyEngine
 from shared.config import settings
 
@@ -42,14 +44,50 @@ class QueryResponse(BaseModel):
 def create_app() -> FastAPI:
     """Factory for the controller FastAPI application."""
 
+    audit = AuditLogger()
+    policy = PolicyEngine()
+    # Singleton MCPClient — created once at startup, shared across all requests.
+    # This avoids the overhead of creating a new httpx.AsyncClient per executor call
+    # and allows the circuit breaker state to persist across requests.
+    _mcp_client: MCPClient | None = None
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Startup and shutdown lifecycle management."""
+        nonlocal _mcp_client
+
+        # ── Startup ────────────────────────────────────────────────────────
+        logger.info("Starting Idaho Federated AI Swarm controller...")
+
+        # Pre-build the LangGraph so the first request isn't slow
+        get_graph()
+        logger.info("LangGraph compiled and ready.")
+
+        # Initialise singleton MCPClient
+        _mcp_client = MCPClient(
+            endpoints=settings.mcp.endpoints,
+            timeout=settings.mcp.timeout,
+        )
+        await _mcp_client.__aenter__()
+        # Store on app state so executor nodes can reach it if needed
+        app.state.mcp_client = _mcp_client
+        logger.info("MCPClient singleton initialised.")
+
+        yield  # Application runs here
+
+        # ── Shutdown ───────────────────────────────────────────────────────
+        logger.info("Shutting down controller...")
+        if _mcp_client:
+            await _mcp_client.__aexit__(None, None, None)
+        await audit.close()
+        logger.info("Shutdown complete.")
+
     app = FastAPI(
         title="Idaho Federated AI Swarm",
         description="Cross-agency intelligence mesh controller",
         version=settings.api_version,
+        lifespan=lifespan,
     )
-
-    audit = AuditLogger()
-    policy = PolicyEngine()
 
     @app.get("/health")
     async def health():
@@ -90,9 +128,5 @@ def create_app() -> FastAPI:
     async def recent_audit(limit: int = 20):
         entries = await audit.get_recent_queries(limit=limit)
         return {"entries": entries, "count": len(entries)}
-
-    @app.on_event("shutdown")
-    async def shutdown():
-        await audit.close()
 
     return app

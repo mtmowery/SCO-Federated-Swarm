@@ -385,49 +385,48 @@ class CrossAgencyReasoner:
 
 # ── LangGraph Node Function ────────────────────────────────────
 
-def reasoning_node(state: InsightState) -> InsightState:
+async def reasoning_node(state: InsightState) -> dict:
     """
     LangGraph node: Cross-Agency Reasoning.
 
-    Builds ephemeral graph from agency data in state,
-    then computes the cross-agency answer.
+    Builds ephemeral graph from agency data in state, computes the
+    cross-agency answer, and returns a PARTIAL STATE DICT — never
+    mutates the state object directly (violates LangGraph's reducer contract).
     """
     reasoner = CrossAgencyReasoner()
+    errors: list[str] = []
 
     idhw_data = state.get("idhw_data", {})
     idoc_data = state.get("idoc_data", {})
     idjc_data = state.get("idjc_data", {})
 
-    # Build graph from available agency data
+    # Build ephemeral graph from available agency data
     if idhw_data:
         try:
             reasoner.build_family_graph(idhw_data)
         except Exception as e:
-            state.setdefault("errors", []).append(f"IDHW graph build error: {e}")
+            errors.append(f"IDHW graph build error: {e}")
             logger.error(f"Failed to build IDHW family graph: {e}")
 
     if idoc_data:
         try:
             reasoner.add_incarceration_data(idoc_data)
         except Exception as e:
-            state.setdefault("errors", []).append(f"IDOC graph overlay error: {e}")
+            errors.append(f"IDOC graph overlay error: {e}")
             logger.error(f"Failed to overlay IDOC data: {e}")
 
     if idjc_data:
         try:
             reasoner.add_juvenile_data(idjc_data)
         except Exception as e:
-            state.setdefault("errors", []).append(f"IDJC graph overlay error: {e}")
+            errors.append(f"IDJC graph overlay error: {e}")
             logger.error(f"Failed to overlay IDJC data: {e}")
 
-    # Determine which computation to run based on the plan/intent
-    intent = state.get("intent", "")
+    # Determine which computation to run based on the question and plan
     question = state.get("question", "").lower()
     plan = state.get("plan", [])
-
     result: dict[str, Any] = {}
 
-    # Route to the appropriate computation
     if _is_foster_incarceration_query(question, plan):
         result = reasoner.count_children_with_incarcerated_parents()
         result["query_type"] = "foster_children_with_incarcerated_parents"
@@ -441,55 +440,45 @@ def reasoning_node(state: InsightState) -> InsightState:
         result["query_type"] = "foster_youth_with_juvenile_record"
 
     else:
-        # Generic: try all and return whatever has data
+        # Generic: try all and return whichever has data
         foster_inc = reasoner.count_children_with_incarcerated_parents()
-        if foster_inc["count"] > 0:
+        if foster_inc.get("count", 0) > 0:
             result = foster_inc
             result["query_type"] = "foster_children_with_incarcerated_parents"
         else:
             result = {
                 "query_type": "unknown",
-                "graph_stats": {
-                    "nodes": reasoner.graph.node_count,
-                    "edges": reasoner.graph.edge_count,
-                },
-                "note": "Could not determine specific computation from query."
+                "note": "Could not determine specific computation from query.",
             }
 
     # Add confidence and graph metadata
-    result["confidence"] = reasoner.compute_confidence(result)
+    confidence = reasoner.compute_confidence(result)
+    result["confidence"] = confidence
     result["graph_stats"] = {
         "nodes": reasoner.graph.node_count,
         "edges": reasoner.graph.edge_count,
     }
     result["timestamp"] = datetime.now(timezone.utc).isoformat()
 
-    state["reasoning_result"] = result
-    state["confidence"] = result["confidence"]
+    # Collect source agency names from graph edges
+    new_sources = list({edge.source_agency for edge in reasoner.graph.edges})
 
-    # Update execution trace
-    trace = state.get("execution_trace", [])
-    trace.append(
-        f"[Reasoning] Built ephemeral graph: {reasoner.graph.node_count} nodes, "
-        f"{reasoner.graph.edge_count} edges. Result: {result.get('query_type')} "
-        f"count={result.get('count', 'N/A')}, confidence={result['confidence']}"
+    trace_msg = (
+        f"[Reasoning] Ephemeral graph: {reasoner.graph.node_count} nodes, "
+        f"{reasoner.graph.edge_count} edges. "
+        f"Result: {result.get('query_type')} "
+        f"count={result.get('count', 'N/A')}, confidence={confidence}"
     )
-    state["execution_trace"] = trace
+    logger.info(trace_msg)
 
-    # Build sources list
-    sources = state.get("sources", [])
-    for edge in reasoner.graph.edges:
-        if edge.source_agency not in sources:
-            sources.append(edge.source_agency)
-    state["sources"] = sources
-
-    logger.info(
-        f"Reasoning complete: {result.get('query_type')} "
-        f"count={result.get('count', 'N/A')} "
-        f"confidence={result['confidence']}"
-    )
-
-    return state
+    # ── Return a partial dict — let LangGraph reducers merge ────────
+    return {
+        "reasoning_result": result,
+        "confidence": confidence,
+        "sources": new_sources,          # Annotated[list, operator.add] reducer appends
+        "errors": errors,                # Annotated[list, operator.add] reducer appends
+        "execution_trace": [trace_msg],  # Annotated[list, operator.add] reducer appends
+    }
 
 
 # ── Helper functions for query routing ──────────────────────────

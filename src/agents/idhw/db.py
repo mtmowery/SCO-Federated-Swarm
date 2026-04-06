@@ -74,9 +74,14 @@ async def get_people_by_insight_ids(insight_ids: list[str]) -> list[dict[str, An
 async def get_family_relationships() -> list[dict[str, Any]]:
     """Get child/mother/father insight_id relationships for all children.
 
+    Includes care metadata so CrossAgencyReasoner can distinguish foster
+    children (start_care_date is not null) from other IDHW child records
+    and so answer synthesis can include care period context.
+
     Returns:
-        List of dictionaries with keys: child_insight_id, mother_insight_id,
-        father_insight_id (for all children regardless of parent presence)
+        List of dicts with keys:
+          child_insight_id, mother_insight_id, father_insight_id,
+          first_name, last_name, dob, start_care_date, end_care_date, end_reason
     """
     session_maker = await get_pg_session("idhw")
 
@@ -85,15 +90,29 @@ async def get_family_relationships() -> list[dict[str, Any]]:
             IDHWPerson.child_insight_id,
             IDHWPerson.mother_insight_id,
             IDHWPerson.father_insight_id,
+            IDHWPerson.insight_id,        # child's own insight_id (may equal child_insight_id)
+            IDHWPerson.first_name,
+            IDHWPerson.last_name,
+            IDHWPerson.dob,
+            IDHWPerson.start_care_date,
+            IDHWPerson.end_care_date,
+            IDHWPerson.end_reason,
         ).where(IDHWPerson.person_type == "child")
 
         result = await session.execute(stmt)
         rows = result.all()
         return [
             {
-                "child_insight_id": row[0],
+                "child_insight_id": row[0] or row[3],  # prefer explicit child_insight_id
                 "mother_insight_id": row[1],
                 "father_insight_id": row[2],
+                "insight_id": row[3],
+                "first_name": row[4],
+                "last_name": row[5],
+                "dob": str(row[6]) if row[6] else None,
+                "start_care_date": str(row[7]) if row[7] else None,
+                "end_care_date": str(row[8]) if row[8] else None,
+                "end_reason": row[9],
             }
             for row in rows
         ]

@@ -89,8 +89,8 @@ async def _llm_synthesize_answer(
     """
     llm = Ollama(
         base_url=settings.ollama.base_url,
-        model=settings.ollama.default_model,
-        temperature=settings.ollama.temperature,
+        model=settings.ollama.answer_model,
+        temperature=settings.ollama.answer_temperature,
         top_p=settings.ollama.top_p,
     )
 
@@ -110,7 +110,7 @@ Be conversational but professional. Include relevant details from the data.
 If there are limitations or gaps in the data, mention them briefly."""
 
     try:
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         return response.strip()
     except Exception as e:
         raise Exception(f"LLM invocation failed: {e}")

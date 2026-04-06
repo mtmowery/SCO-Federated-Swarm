@@ -3,17 +3,24 @@ Main LangGraph state machine for the Idaho Federated AI Swarm controller.
 
 Orchestrates the complete query flow:
 1. Planning: Analyze question and route to agencies
-2. Execution: Query agency MCP servers in parallel
-3. Reasoning: Cross-reference results and resolve identities
+2. Execution: IDHW runs first (has family linkage data); parent IDs are extracted;
+   then IDJC and IDOC run in parallel using those parent IDs
+3. Reasoning: CrossAgencyReasoner builds ephemeral graph and counts matches
 4. Answer: Synthesize natural language response
 
-Graph topology:
+Graph topology (cross-agency with IDHW):
   intent_node
     -> planner_node
     -> router_node
-    -> [idhw_node, idjc_node, idoc_node] (parallel)
-    -> reasoning_node
+    -> execute_idhw  (sequential — must complete first)
+    -> extract_parent_ids_node
+    -> [execute_idjc, execute_idoc]  (parallel fan-out)
+    -> reasoning_node  (CrossAgencyReasoner)
     -> answer_node
+
+For queries that don't need IDHW the router sends directly to extract_parent_ids
+(which is a no-op when idhw_data is empty) and then fans out to the relevant
+IDJC / IDOC nodes.
 """
 
 import logging
@@ -24,23 +31,24 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
 from shared.schemas import InsightState, AgencyName
-from shared.config import settings
 from .planner import plan_query
-from .executor import execute_idhw, execute_idjc, execute_idoc
+from .executor import execute_idhw, execute_idjc, execute_idoc, extract_parent_ids_node
 from .answer import synthesize_answer
+from reasoning.cross_agency import reasoning_node as cross_agency_reasoning_node
 
 logger = logging.getLogger(__name__)
 
 
 async def intent_node(state: InsightState) -> dict:
-    """Initial node: validate and prepare state."""
+    """Initial node: seed empty collections so reducers have a base."""
     return {
         "idhw_data": {},
         "idjc_data": {},
         "idoc_data": {},
         "identity_matches": {},
         "reasoning_result": {},
-        # Lists use operator.add reducer, so these seed the initial values
+        "parent_ids": [],
+        "child_to_parents": {},
         "errors": [],
         "execution_trace": ["Starting query execution"],
         "sources": [],
@@ -52,279 +60,37 @@ async def router_node(state: InsightState) -> dict:
     agencies = state.get("agencies", [])
     return {
         "execution_trace": [
-            f"Routing to {len(agencies)} agencies: {[a.value for a in agencies]}"
+            f"Routing to agencies: {[a.value for a in agencies]}"
         ],
     }
 
 
-async def reasoning_node(state: InsightState) -> dict:
-    """Reasoning node: cross-reference and match identities."""
-    traces = ["Beginning cross-agency reasoning and identity matching"]
-
-    reasoning_result = {
-        "idhw_data": state.get("idhw_data", {}),
-        "idjc_data": state.get("idjc_data", {}),
-        "idoc_data": state.get("idoc_data", {}),
-    }
-
-    identity_matches = {}
-
-    agencies_with_data = [
-        agency
-        for agency in [AgencyName.IDHW, AgencyName.IDJC, AgencyName.IDOC]
-        if state.get(f"{agency.value}_data", {})
-    ]
-
-    if len(agencies_with_data) > 1:
-        identity_matches = await _match_identities(
-            idhw_data=state.get("idhw_data", {}),
-            idjc_data=state.get("idjc_data", {}),
-            idoc_data=state.get("idoc_data", {}),
-        )
-        reasoning_result["identity_matches"] = identity_matches
-
-        if identity_matches.get("matches"):
-            traces.append(
-                f"Cross-agency identity resolution: "
-                f"{len(identity_matches['matches'])} identities matched"
-            )
-
-    return {
-        "reasoning_result": reasoning_result,
-        "identity_matches": identity_matches,
-        "execution_trace": traces,
-    }
-
-
-async def _match_identities(
-    idhw_data: dict[str, Any],
-    idjc_data: dict[str, Any],
-    idoc_data: dict[str, Any],
-) -> dict[str, Any]:
+def _needs_idhw_first(state: InsightState) -> str:
     """
-    Perform cross-agency identity matching.
+    Conditional edge: decide whether IDHW must run first.
 
-    Matches individuals across IDHW (family), IDJC (youth), and IDOC (adult)
-    using insight_id, SSN, and name/DOB combinations.
-
-    Args:
-        idhw_data: IDHW query results
-        idjc_data: IDJC query results
-        idoc_data: IDOC query results
-
-    Returns:
-        Identity matches dictionary with structure:
-        {
-            "matches": [
-                {
-                    "insight_id": "...",
-                    "agencies": ["idhw", "idoc"],
-                    "confidence": 0.95
-                }
-            ]
-        }
+    Returns 'execute_idhw' when IDHW is in the plan.
+    Returns 'skip_idhw' when IDHW is not required.
     """
-    matches = []
-
-    # Extract identifiers from IDHW
-    idhw_identifiers = _extract_identifiers_idhw(idhw_data)
-
-    # Extract identifiers from IDJC
-    idjc_identifiers = _extract_identifiers_idjc(idjc_data)
-
-    # Extract identifiers from IDOC
-    idoc_identifiers = _extract_identifiers_idoc(idoc_data)
-
-    # Match across agencies using fast set operations
-    # Since identifiers dictionaries use insight_id as keys, we can just intersect the keys
-
-    # Helper to check if a match already exists
-    def _match_exists(id1, id2, key1, key2):
-        return any(m.get(key1) == id1 and m.get(key2) == id2 for m in matches)
-
-    # IDHW to IDOC matching
-    idhw_idoc_common = set(idhw_identifiers.keys()).intersection(idoc_identifiers.keys())
-    for insight_id in idhw_idoc_common:
-        matches.append({
-            "insight_id": insight_id,
-            "agencies": ["idhw", "idoc"],
-            "confidence": 1.0,
-            "idhw_id": insight_id,
-            "idoc_id": insight_id,
-        })
-
-    # IDHW to IDJC matching
-    idhw_idjc_common = set(idhw_identifiers.keys()).intersection(idjc_identifiers.keys())
-    for insight_id in idhw_idjc_common:
-        if not _match_exists(insight_id, insight_id, "idhw_id", "idjc_id"):
-            matches.append({
-                "insight_id": insight_id,
-                "agencies": ["idhw", "idjc"],
-                "confidence": 1.0,
-                "idhw_id": insight_id,
-                "idjc_id": insight_id,
-            })
-
-    # IDJC to IDOC matching
-    idjc_idoc_common = set(idjc_identifiers.keys()).intersection(idoc_identifiers.keys())
-    for insight_id in idjc_idoc_common:
-        if not _match_exists(insight_id, insight_id, "idjc_id", "idoc_id"):
-            matches.append({
-                "insight_id": insight_id,
-                "agencies": ["idjc", "idoc"],
-                "confidence": 1.0,
-                "idjc_id": insight_id,
-                "idoc_id": insight_id,
-            })
-
-    return {"matches": matches, "total_matches": len(matches)}
+    agencies = state.get("agencies", [])
+    if AgencyName.IDHW in agencies:
+        return "execute_idhw"
+    return "skip_idhw"
 
 
-def _extract_identifiers_idhw(idhw_data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Extract identifiers from IDHW data."""
-    identifiers = {}
-
-    for child in idhw_data.get("child_records", []):
-        if isinstance(child, dict):
-            key = child.get("insight_id") or child.get("child_insight_id")
-            if key:
-                identifiers[key] = {
-                    "insight_id": key,
-                    "ssn": child.get("ssn"),
-                    "name": f"{child.get('first_name', '')} {child.get('last_name', '')}".strip(),
-                    "dob": child.get("dob"),
-                    "agency": "idhw",
-                }
-
-    for rel in idhw_data.get("family_relationships", []):
-        if isinstance(rel, dict):
-            # Add parent identifiers
-            mother_id = rel.get("mother_insight_id")
-            if mother_id:
-                identifiers[mother_id] = {
-                    "insight_id": mother_id,
-                    "ssn": rel.get("mother_ssn"),
-                    "name": rel.get("mother_name"),
-                    "dob": rel.get("mother_dob"),
-                    "agency": "idhw",
-                    "relationship": "parent",
-                }
-
-            father_id = rel.get("father_insight_id")
-            if father_id:
-                identifiers[father_id] = {
-                    "insight_id": father_id,
-                    "ssn": rel.get("father_ssn"),
-                    "name": rel.get("father_name"),
-                    "dob": rel.get("father_dob"),
-                    "agency": "idhw",
-                    "relationship": "parent",
-                }
-
-    return identifiers
-
-
-def _extract_identifiers_idjc(idjc_data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Extract identifiers from IDJC data."""
-    identifiers = {}
-
-    for commitment in idjc_data.get("commitments", []):
-        if isinstance(commitment, dict):
-            key = commitment.get("insight_id") or commitment.get("ijos_id")
-            if key:
-                identifiers[key] = {
-                    "insight_id": key,
-                    "ssn": commitment.get("ssn"),
-                    "name": f"{commitment.get('first_name', '')} {commitment.get('last_name', '')}".strip(),
-                    "dob": commitment.get("dob"),
-                    "agency": "idjc",
-                }
-
-    return identifiers
-
-
-def _extract_identifiers_idoc(idoc_data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Extract identifiers from IDOC data."""
-    identifiers = {}
-
-    for inmate in idoc_data.get("inmates", []):
-        if isinstance(inmate, dict):
-            key = inmate.get("insight_id") or inmate.get("ofndr_num")
-            if key:
-                identifiers[key] = {
-                    "insight_id": key,
-                    "ssn": inmate.get("ssn_nbr"),
-                    "name": f"{inmate.get('fnam', '')} {inmate.get('lnam', '')}".strip(),
-                    "dob": inmate.get("dob_dtd"),
-                    "agency": "idoc",
-                }
-
-    return identifiers
-
-
-def _is_identity_match(info1: dict[str, Any], info2: dict[str, Any]) -> bool:
+def _route_after_extract(state: InsightState) -> list[str]:
     """
-    Determine if two identifiers match.
-
-    Strictly enforces matching using the universal insight_id.
-
-    Args:
-        info1: First identifier dict
-        info2: Second identifier dict
-
-    Returns:
-        True if identities match exactly on insight_id
-    """
-    id1 = info1.get("insight_id")
-    id2 = info2.get("insight_id")
-    if id1 and id2 and id1 == id2:
-        return True
-
-    return False
-
-
-def _calculate_match_confidence(info1: dict[str, Any], info2: dict[str, Any]) -> float:
-    """
-    Calculate confidence score for identity match.
-
-    Args:
-        info1: First identifier dict
-        info2: Second identifier dict
-
-    Returns:
-        Confidence score (0.0 or 1.0)
-    """
-    # Perfect match: insight_id
-    if info1.get("insight_id") and info2.get("insight_id"):
-        if info1.get("insight_id") == info2.get("insight_id"):
-            return 1.0
-
-    return 0.0
-
-
-def _route_to_agency_nodes(state: InsightState) -> list[str]:
-    """
-    Determine which agency nodes to execute.
-
-    Args:
-        state: InsightState with agencies
-
-    Returns:
-        List of next node names
+    After parent IDs are extracted, fan out to whichever of IDJC/IDOC were requested.
+    If neither was requested (IDHW-only query), go straight to reasoning.
     """
     agencies = state.get("agencies", [])
     next_nodes = []
-
-    if AgencyName.IDHW in agencies:
-        next_nodes.append("execute_idhw")
     if AgencyName.IDJC in agencies:
         next_nodes.append("execute_idjc")
     if AgencyName.IDOC in agencies:
         next_nodes.append("execute_idoc")
-
     if not next_nodes:
-        next_nodes = ["execute_idhw", "execute_idjc", "execute_idoc"]
-
+        next_nodes.append("reasoning")
     return next_nodes
 
 
@@ -332,63 +98,61 @@ def build_graph() -> CompiledStateGraph:
     """
     Build and compile the LangGraph state machine.
 
-    Topology:
-        intent_node
-        -> planner_node
-        -> router_node
-        -> [execute_idhw, execute_idjc, execute_idoc]
-        -> reasoning_node
-        -> answer_node
-        -> END
-
     Returns:
         Compiled state graph
     """
     graph = StateGraph(InsightState)
 
-    # Add nodes
+    # ── Nodes ─────────────────────────────────────────────────────────────────
     graph.add_node("intent", intent_node)
     graph.add_node("planner", plan_query)
     graph.add_node("router", router_node)
     graph.add_node("execute_idhw", execute_idhw)
+    graph.add_node("extract_parent_ids", extract_parent_ids_node)
     graph.add_node("execute_idjc", execute_idjc)
     graph.add_node("execute_idoc", execute_idoc)
-    graph.add_node("reasoning", reasoning_node)
+    graph.add_node("reasoning", cross_agency_reasoning_node)
     graph.add_node("answer", synthesize_answer)
 
-    # Add edges
+    # ── Linear spine ──────────────────────────────────────────────────────────
+    graph.add_edge(START, "intent")
     graph.add_edge("intent", "planner")
     graph.add_edge("planner", "router")
 
-    # Router to agency nodes - use conditional routing
+    # ── Router: IDHW-first path vs skip-IDHW path ────────────────────────────
     graph.add_conditional_edges(
         "router",
-        lambda state: _route_to_agency_nodes(state),
+        _needs_idhw_first,
         {
             "execute_idhw": "execute_idhw",
-            "execute_idjc": "execute_idjc",
-            "execute_idoc": "execute_idoc",
+            "skip_idhw": "extract_parent_ids",   # no-op when idhw_data empty
         },
     )
 
-    # All agency nodes converge to reasoning
-    graph.add_edge("execute_idhw", "reasoning")
+    # IDHW completes → extract parent IDs (sequential dependency)
+    graph.add_edge("execute_idhw", "extract_parent_ids")
+
+    # extract_parent_ids → fan-out to IDJC and/or IDOC (or straight to reasoning)
+    graph.add_conditional_edges(
+        "extract_parent_ids",
+        _route_after_extract,
+        {
+            "execute_idjc": "execute_idjc",
+            "execute_idoc": "execute_idoc",
+            "reasoning": "reasoning",
+        },
+    )
+
+    # Parallel agency nodes converge to reasoning
     graph.add_edge("execute_idjc", "reasoning")
     graph.add_edge("execute_idoc", "reasoning")
 
-    # Reasoning to answer
+    # Reasoning → answer → END
     graph.add_edge("reasoning", "answer")
-
-    # Answer to end
     graph.add_edge("answer", END)
 
-    # Set entry point
-    graph.add_edge(START, "intent")
-
-    # Add memory checkpointer
+    # ── Compile ───────────────────────────────────────────────────────────────
     memory = MemorySaver()
-
-    # Compile
     return graph.compile(checkpointer=memory)
 
 
@@ -396,9 +160,8 @@ def build_graph() -> CompiledStateGraph:
 _graph: CompiledStateGraph | None = None
 
 
-
 def get_graph() -> CompiledStateGraph:
-    """Get or build the compiled graph."""
+    """Get or build the compiled graph (singleton)."""
     global _graph
     if _graph is None:
         _graph = build_graph()
@@ -413,15 +176,8 @@ async def run_query(question: str, thread_id: str = "default_thread") -> dict[st
         question: Natural language question
         thread_id: Conversation thread identifier for memory
 
-
     Returns:
-        Dictionary with:
-        - answer: str - Natural language answer
-        - confidence: float - Confidence score
-        - sources: list[str] - Contributing agencies
-        - intent: str - Query intent classification
-        - errors: list[str] - Any errors encountered
-        - execution_trace: list[str] - Execution log
+        Dictionary with answer, confidence, sources, intent, errors, execution_trace.
     """
     graph = get_graph()
 
@@ -437,6 +193,8 @@ async def run_query(question: str, thread_id: str = "default_thread") -> dict[st
         "reasoning_result": {},
         "answer": "",
         "confidence": 0.0,
+        "parent_ids": [],
+        "child_to_parents": {},
         "sources": [],
         "errors": [],
         "execution_trace": [],
@@ -450,7 +208,7 @@ async def run_query(question: str, thread_id: str = "default_thread") -> dict[st
             "answer": final_state.get("answer", ""),
             "confidence": final_state.get("confidence", 0.0),
             "sources": final_state.get("sources", []),
-            "intent": final_state.get("intent", "").value if final_state.get("intent") else None,
+            "intent": final_state.get("intent").value if final_state.get("intent") else None,
             "errors": final_state.get("errors", []),
             "execution_trace": final_state.get("execution_trace", []),
         }

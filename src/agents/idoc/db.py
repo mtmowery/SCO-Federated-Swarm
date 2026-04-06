@@ -15,6 +15,17 @@ from .models import IDOCSentence
 
 logger = logging.getLogger(__name__)
 
+# Explicit set of statuses that represent active incarceration.
+# Using a whitelist (not "!= DISCHARGED") avoids silently including new
+# statuses added in the future (e.g. DECEASED, ESCAPED, FURLOUGH) that
+# should NOT be counted as "incarcerated".
+ACTIVE_INCARCERATION_STATUSES = frozenset({
+    "ACTIVE",
+    "SENTENCED",
+    "COMMITTED",
+    "REVOKED",
+})
+
 
 async def get_all_sentences(limit: int = 1000, offset: int = 0) -> list[dict]:
     """
@@ -101,21 +112,18 @@ async def check_incarceration(insight_ids: list[str]) -> dict[str, bool]:
     session_maker = await get_pg_session("idoc")
 
     async with session_maker() as session:
-        # Active sentences are those NOT discharged
+        # Active sentences: only explicitly active statuses (whitelist, not "!= DISCHARGED")
         stmt = select(IDOCSentence).where(
             and_(
                 IDOCSentence.insight_id.in_(insight_ids),
-                IDOCSentence.sent_status != "DISCHARGED",
+                IDOCSentence.sent_status.in_(ACTIVE_INCARCERATION_STATUSES),
             )
         )
         result = await session.execute(stmt)
         records = result.scalars().all()
 
-        # Get unique insight_ids with active sentences
-        active_ids = {record.insight_id for record in records}
-
-        # Return dict with all insight_ids marked True or False
-        return {iid: iid in active_ids for iid in insight_ids}
+        # Return records as dicts so callers can extract insight_id for CrossAgencyReasoner
+        return [record.to_dict() for record in records]
 
 
 async def count_incarcerated_from_ids(insight_ids: list[str]) -> int:
@@ -134,11 +142,11 @@ async def count_incarcerated_from_ids(insight_ids: list[str]) -> int:
     session_maker = await get_pg_session("idoc")
 
     async with session_maker() as session:
-        # Count distinct insight_ids with non-discharged status
+        # Count distinct insight_ids with explicitly active statuses
         stmt = select(func.count(func.distinct(IDOCSentence.insight_id))).where(
             and_(
                 IDOCSentence.insight_id.in_(insight_ids),
-                IDOCSentence.sent_status != "DISCHARGED",
+                IDOCSentence.sent_status.in_(ACTIVE_INCARCERATION_STATUSES),
             )
         )
         result = await session.execute(stmt)
@@ -163,7 +171,7 @@ async def get_active_offenders(limit: int = 1000, offset: int = 0) -> list[dict]
     async with session_maker() as session:
         stmt = (
             select(IDOCSentence)
-            .where(IDOCSentence.sent_status != "DISCHARGED")
+            .where(IDOCSentence.sent_status.in_(ACTIVE_INCARCERATION_STATUSES))
             .limit(limit)
             .offset(offset)
         )

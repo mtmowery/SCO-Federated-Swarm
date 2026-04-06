@@ -30,7 +30,7 @@ Create a Python virtual environment and install dependencies.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ---
@@ -79,7 +79,7 @@ python main.py load-all
 ```
 
 *This command will:*
-1. Parse CSVs from `data/input_sample_data/`.
+1. Parse CSVs from `data/`.
 2. Populate the agency-specific PostgreSQL databases.
 3. Build the cross-agency graph relationships in Neo4j.
 
@@ -132,3 +132,10 @@ python3 main.py load-all
 | `python main.py health` | Checks connectivity to all swarm services |
 | `python main.py query "..."` | Runs a natural language query through the mesh |
 | `docker compose logs -f` | Follow logs for all services |
+
+
+Neo4j Browser UI (Web Interface):
+
+URL: http://localhost:7475
+Username: neo4j
+Password: fed_swarm_2026

@@ -28,6 +28,7 @@ class QueryIntent(str, Enum):
     SINGLE_AGENCY = "single_agency"
     STATISTICS = "statistics"
     LOOKUP = "lookup"
+    RELATIONSHIP = "relationship"
 
 
 class AgencyName(str, Enum):
@@ -131,6 +132,12 @@ class InsightState(TypedDict, total=False):
     idhw_data: dict[str, Any]
     idjc_data: dict[str, Any]
     idoc_data: dict[str, Any]
+
+    # Cross-agency parent linkage — extracted from idhw_data before IDJC/IDOC fan-out
+    # parent_ids: flat list of all unique parent insight_ids from foster children
+    # child_to_parents: map of child_insight_id -> list of parent insight_ids
+    parent_ids: list[str]
+    child_to_parents: dict[str, list]
 
     # Cross-agency resolution
     identity_matches: dict[str, Any]

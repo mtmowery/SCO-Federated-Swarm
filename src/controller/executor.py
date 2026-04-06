@@ -1,13 +1,15 @@
 """
 Executor agent nodes for querying agency MCP servers.
 
-Implements separate executor nodes for each agency:
-- execute_idhw: Foster care and family relationships
-- execute_idjc: Juvenile justice records
-- execute_idoc: Adult incarceration records
+Execution order enforced by graph.py topology:
+  1. execute_idhw  (sequential — provides family relationships)
+  2. extract_parent_ids_node  (sequential — extracts parent insight_ids from idhw_data)
+  3. execute_idjc + execute_idoc  (parallel fan-out — both read parent_ids from state)
 
-Each executor checks if their agency is in the plan, calls appropriate MCP tools,
-and updates state with results and traces.
+Data key contract with CrossAgencyReasoner (reasoning/cross_agency.py):
+  - idhw_data: {"family_relationships": [...], "child_records": [...]}
+  - idjc_data: {"juvenile_ids": set_or_list_of_insight_ids, "commitments": [...]}
+  - idoc_data: {"incarcerated_ids": set_or_list_of_insight_ids, "inmates": [...]}
 """
 
 import logging
@@ -19,19 +21,90 @@ from .mcp_client import MCPClient
 
 logger = logging.getLogger(__name__)
 
+# Chunk size for SQL IN clause — avoids DB query plan degradation on huge lists
+_CHUNK_SIZE = 500
+
+
+def _chunked(lst: list, size: int):
+    """Yield successive chunks of `size` from `lst`."""
+    for i in range(0, len(lst), size):
+        yield lst[i : i + size]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# extract_parent_ids_node  (sequential step between IDHW and IDJC/IDOC)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def extract_parent_ids_node(state: InsightState) -> dict:
+    """
+    Extract parent insight_ids from IDHW family relationship data and write
+    them to state so IDJC and IDOC executors can use them.
+
+    Also builds child_to_parents mapping for CrossAgencyReasoner.
+
+    This node is a no-op when idhw_data is empty (e.g. non-IDHW queries).
+    """
+    idhw_data = state.get("idhw_data", {})
+    if not idhw_data:
+        return {
+            "parent_ids": [],
+            "child_to_parents": {},
+            "execution_trace": [],
+        }
+
+    parent_id_set: set[str] = set()
+    child_to_parents: dict[str, list] = {}
+
+    # Prefer family_relationships (richer structure)
+    relationships = idhw_data.get("family_relationships") or idhw_data.get("relationships", [])
+    for rel in relationships:
+        if not isinstance(rel, dict):
+            continue
+        child_id = rel.get("child_insight_id")
+        mother_id = rel.get("mother_insight_id")
+        father_id = rel.get("father_insight_id")
+
+        parents_for_child = []
+        if mother_id:
+            parent_id_set.add(mother_id)
+            parents_for_child.append({"insight_id": mother_id, "role": "mother"})
+        if father_id:
+            parent_id_set.add(father_id)
+            parents_for_child.append({"insight_id": father_id, "role": "father"})
+
+        if child_id and parents_for_child:
+            child_to_parents[child_id] = parents_for_child
+
+    parent_ids = list(parent_id_set)
+    trace = f"Extracted {len(parent_ids)} unique parent IDs from {len(relationships)} family relationships"
+    logger.info(trace)
+
+    return {
+        "parent_ids": parent_ids,
+        "child_to_parents": child_to_parents,
+        "execution_trace": [trace],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# execute_idhw
+# ─────────────────────────────────────────────────────────────────────────────
 
 async def execute_idhw(state: InsightState) -> dict:
     """
-    Execute IDHW (foster care) queries.
+    Execute IDHW (foster care / family relationships) queries.
 
-    Returns only the keys this node modifies — critical for
-    parallel execution in LangGraph (avoids concurrent key writes).
+    Fetches:
+      - family_relationships: child→parent mappings with insight_ids
+      - child_records: foster children with care metadata
+
+    Returns only the keys this node modifies.
     """
     agencies = state.get("agencies", [])
-    traces = []
-    errors = []
-    sources = []
-    idhw_data = {}
+    traces: list[str] = []
+    errors: list[str] = []
+    sources: list[str] = []
+    idhw_data: dict[str, Any] = {}
 
     if AgencyName.IDHW not in agencies:
         return {"idhw_data": {}, "sources": [], "errors": [], "execution_trace": []}
@@ -43,45 +116,41 @@ async def execute_idhw(state: InsightState) -> dict:
             endpoints=settings.mcp.endpoints,
             timeout=settings.mcp.timeout,
         ) as client:
-            question = state.get("question", "")
-            plan = state.get("plan", [])
-            query_params = _extract_query_params_idhw(question)
+            plan_text = " ".join(state.get("plan", [])).lower()
+            question_lower = state.get("question", "").lower()
 
-            family_data = {}
-            if any("family" in step.lower() or "relationship" in step.lower() for step in plan):
-                try:
-                    family_data = await client.execute_tool(
-                        "idhw", "get_family_relationships", {}
-                    )
-                    traces.append(
-                        f"IDHW family relationships: {len(family_data.get('relationships', []))} found"
-                    )
-                except Exception as e:
-                    errors.append(f"IDHW family lookup failed: {e}")
-                    logger.error(f"IDHW family lookup failed: {e}")
+            family_data: dict = {}
+            child_data: dict = {}
 
-            child_data = {}
-            if any("child" in step.lower() for step in plan):
+            # Always fetch family relationships for cross-agency queries
+            try:
+                family_data = await client.execute_tool(
+                    "idhw", "get_family_relationships", {}
+                )
+                rel_count = len(family_data.get("relationships", []))
+                traces.append(f"IDHW family relationships: {rel_count} found")
+            except Exception as e:
+                errors.append(f"IDHW family lookup failed: {e}")
+                logger.error(f"IDHW family lookup failed: {e}")
+
+            # Fetch foster children records when question involves children
+            if any(kw in question_lower + plan_text for kw in ["child", "foster", "welfare", "youth"]):
                 try:
                     child_data = await client.execute_tool(
                         "idhw", "get_children", {}
                     )
-                    traces.append(
-                        f"IDHW child records: {len(child_data.get('children', []))} found"
-                    )
+                    child_count = len(child_data.get("children", []))
+                    traces.append(f"IDHW child records: {child_count} found")
                 except Exception as e:
                     errors.append(f"IDHW child lookup failed: {e}")
                     logger.error(f"IDHW child lookup failed: {e}")
 
             idhw_data = {
+                # Use 'family_relationships' key — matches CrossAgencyReasoner.build_family_graph()
                 "family_relationships": family_data.get("relationships", []),
                 "child_records": child_data.get("children", []),
             }
             sources.append("idhw")
-
-            parent_ids = _extract_parent_ids(family_data)
-            if parent_ids:
-                traces.append(f"Extracted {len(parent_ids)} parent IDs for cross-agency matching")
 
     except Exception as e:
         errors.append(f"IDHW execution failed: {e}")
@@ -95,17 +164,28 @@ async def execute_idhw(state: InsightState) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# execute_idjc
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def execute_idjc(state: InsightState) -> dict:
     """
     Execute IDJC (juvenile justice) queries.
 
-    Returns only the keys this node modifies.
+    Uses parent_ids from state (written by extract_parent_ids_node) to look up
+    whether any foster-child parents have juvenile records.
+
+    Returns:
+      idjc_data = {
+          "juvenile_ids": list[str],   # insight_ids with a juvenile record
+          "commitments": list[dict],   # full commitment records
+      }
     """
     agencies = state.get("agencies", [])
-    traces = []
-    errors = []
-    sources = []
-    idjc_data = {}
+    traces: list[str] = []
+    errors: list[str] = []
+    sources: list[str] = []
+    idjc_data: dict[str, Any] = {}
 
     if AgencyName.IDJC not in agencies:
         return {"idjc_data": {}, "sources": [], "errors": [], "execution_trace": []}
@@ -117,54 +197,50 @@ async def execute_idjc(state: InsightState) -> dict:
             endpoints=settings.mcp.endpoints,
             timeout=settings.mcp.timeout,
         ) as client:
-            question = state.get("question", "")
-            plan = state.get("plan", [])
-            query_params = _extract_query_params_idjc(question)
+            # Read parent_ids written by extract_parent_ids_node (guaranteed available)
+            parent_ids: list[str] = state.get("parent_ids", [])
+            all_commitments: list[dict] = []
+            juvenile_ids: set[str] = set()
 
-            if AgencyName.IDHW in agencies:
-                child_ids = _extract_child_ids(state.get("idhw_data", {}))
-                if child_ids:
-                    query_params["insight_ids"] = child_ids
+            if parent_ids:
+                # Chunk the lookup to keep SQL IN clauses manageable
+                for chunk in _chunked(parent_ids, _CHUNK_SIZE):
+                    try:
+                        result = await client.execute_tool(
+                            "idjc", "check_juvenile_record", {"insight_ids": chunk}
+                        )
+                        records = result if isinstance(result, list) else result.get("results", [])
+                        all_commitments.extend(records)
+                        for r in records:
+                            if isinstance(r, dict) and r.get("insight_id"):
+                                juvenile_ids.add(r["insight_id"])
+                    except Exception as e:
+                        errors.append(f"IDJC bulk lookup chunk failed: {e}")
+                        logger.error(f"IDJC bulk lookup chunk failed: {e}")
 
-            commitment_data = {}
-            if any(
-                kw in " ".join(plan).lower() + " " + question.lower()
-                for kw in ["detention", "commitment", "juvenile", "youth", "idjc", "kids", "children", "offender"]
-            ):
-                try:
-                    if "insight_ids" in query_params and query_params["insight_ids"]:
-                        commitment_data = await client.execute_tool(
-                            "idjc", "get_people_bulk", {"insight_ids": query_params["insight_ids"]}
-                        )
-                        if isinstance(commitment_data, list):
-                            idjc_data = {"commitments": commitment_data}
-                            count = len(commitment_data)
-                        else:
-                            idjc_data = {"commitments": commitment_data.get("results", {})}
-                            count = commitment_data.get('count', 0)
-                        traces.append(
-                            f"IDJC cross-agency match: {count} people matched"
-                        )
-                    else:
-                        commitment_data = await client.execute_tool(
-                            "idjc", "get_commitments", {"limit": 1000}
-                        )
-                        if isinstance(commitment_data, list):
-                            idjc_data = {"commitments": commitment_data}
-                            count = len(commitment_data)
-                        else:
-                            idjc_data = {"commitments": commitment_data.get("commitments", [])}
-                            count = commitment_data.get('count', 0)
-                        traces.append(
-                            f"IDJC commitments: {count} found"
-                        )
-                except Exception as e:
-                    errors.append(f"IDJC commitment lookup failed: {e}")
-                    logger.error(f"IDJC commitment lookup failed: {e}")
-                    idjc_data = {"commitments": []}
-
+                traces.append(
+                    f"IDJC: {len(juvenile_ids)} parents have juvenile records "
+                    f"(checked {len(parent_ids)} parent IDs)"
+                )
             else:
-                idjc_data = {"commitments": []}
+                # Fallback: no parent IDs — pull general commitment list
+                try:
+                    result = await client.execute_tool(
+                        "idjc", "get_commitments", {"limit": 1000}
+                    )
+                    all_commitments = result if isinstance(result, list) else result.get("commitments", [])
+                    for r in all_commitments:
+                        if isinstance(r, dict) and r.get("insight_id"):
+                            juvenile_ids.add(r["insight_id"])
+                    traces.append(f"IDJC commitments (general): {len(all_commitments)} found")
+                except Exception as e:
+                    errors.append(f"IDJC general lookup failed: {e}")
+                    logger.error(f"IDJC general lookup failed: {e}")
+
+            idjc_data = {
+                "juvenile_ids": list(juvenile_ids),   # key expected by CrossAgencyReasoner
+                "commitments": all_commitments,
+            }
             sources.append("idjc")
 
     except Exception as e:
@@ -179,17 +255,28 @@ async def execute_idjc(state: InsightState) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# execute_idoc
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def execute_idoc(state: InsightState) -> dict:
     """
     Execute IDOC (adult incarceration) queries.
 
-    Returns only the keys this node modifies.
+    Uses parent_ids from state (written by extract_parent_ids_node) to look up
+    whether any foster-child parents are or were incarcerated.
+
+    Returns:
+      idoc_data = {
+          "incarcerated_ids": list[str],   # insight_ids with active incarceration
+          "inmates": list[dict],           # full inmate records
+      }
     """
     agencies = state.get("agencies", [])
-    traces = []
-    errors = []
-    sources = []
-    idoc_data = {}
+    traces: list[str] = []
+    errors: list[str] = []
+    sources: list[str] = []
+    idoc_data: dict[str, Any] = {}
 
     if AgencyName.IDOC not in agencies:
         return {"idoc_data": {}, "sources": [], "errors": [], "execution_trace": []}
@@ -201,54 +288,48 @@ async def execute_idoc(state: InsightState) -> dict:
             endpoints=settings.mcp.endpoints,
             timeout=settings.mcp.timeout,
         ) as client:
-            question = state.get("question", "")
-            plan = state.get("plan", [])
-            query_params = _extract_query_params_idoc(question)
+            parent_ids: list[str] = state.get("parent_ids", [])
+            all_inmates: list[dict] = []
+            incarcerated_ids: set[str] = set()
 
-            if AgencyName.IDHW in agencies:
-                parent_ids = _extract_parent_ids(state.get("idhw_data", {}))
-                if parent_ids:
-                    query_params["insight_ids"] = parent_ids
+            if parent_ids:
+                for chunk in _chunked(parent_ids, _CHUNK_SIZE):
+                    try:
+                        result = await client.execute_tool(
+                            "idoc", "check_incarceration", {"insight_ids": chunk}
+                        )
+                        records = result if isinstance(result, list) else result.get("results", [])
+                        all_inmates.extend(records)
+                        for r in records:
+                            if isinstance(r, dict) and r.get("insight_id"):
+                                incarcerated_ids.add(r["insight_id"])
+                    except Exception as e:
+                        errors.append(f"IDOC bulk lookup chunk failed: {e}")
+                        logger.error(f"IDOC bulk lookup chunk failed: {e}")
 
-            inmate_data = {}
-            if any(
-                kw in " ".join(plan).lower()
-                for kw in ["inmate", "incarcerat", "prison", "offender"]
-            ):
-                try:
-                    if "insight_ids" in query_params and query_params["insight_ids"]:
-                        # We have specific parent IDs to check
-                        inmate_data = await client.execute_tool(
-                            "idoc", "get_people_bulk", {"insight_ids": query_params["insight_ids"]}
-                        )
-                        if isinstance(inmate_data, list):
-                            idoc_data = {"inmates": inmate_data}
-                            count = len(inmate_data)
-                        else:
-                            idoc_data = {"inmates": inmate_data.get("results", {})}
-                            count = inmate_data.get('count', 0)
-                        traces.append(
-                            f"IDOC cross-agency match: {count} people matched"
-                        )
-                    else:
-                        inmate_data = await client.execute_tool(
-                            "idoc", "get_active_offenders", {"limit": 1000}
-                        )
-                        if isinstance(inmate_data, list):
-                            idoc_data = {"inmates": inmate_data}
-                            count = len(inmate_data)
-                        else:
-                            idoc_data = {"inmates": inmate_data.get("offenders", [])}
-                            count = inmate_data.get('count', 0)
-                        traces.append(
-                            f"IDOC active offenders: {count} found"
-                        )
-                except Exception as e:
-                    errors.append(f"IDOC inmate lookup failed: {e}")
-                    logger.error(f"IDOC inmate lookup failed: {e}")
-                    idoc_data = {"inmates": []}
+                traces.append(
+                    f"IDOC: {len(incarcerated_ids)} parents have incarceration records "
+                    f"(checked {len(parent_ids)} parent IDs)"
+                )
             else:
-                idoc_data = {"inmates": []}
+                # Fallback: no parent IDs — pull general active offender list
+                try:
+                    result = await client.execute_tool(
+                        "idoc", "get_active_offenders", {"limit": 1000}
+                    )
+                    all_inmates = result if isinstance(result, list) else result.get("offenders", [])
+                    for r in all_inmates:
+                        if isinstance(r, dict) and r.get("insight_id"):
+                            incarcerated_ids.add(r["insight_id"])
+                    traces.append(f"IDOC active offenders (general): {len(all_inmates)} found")
+                except Exception as e:
+                    errors.append(f"IDOC general lookup failed: {e}")
+                    logger.error(f"IDOC general lookup failed: {e}")
+
+            idoc_data = {
+                "incarcerated_ids": list(incarcerated_ids),  # key expected by CrossAgencyReasoner
+                "inmates": all_inmates,
+            }
             sources.append("idoc")
 
     except Exception as e:
@@ -263,137 +344,37 @@ async def execute_idoc(state: InsightState) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Private helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _extract_query_params_idhw(question: str) -> dict[str, Any]:
-    """
-    Extract IDHW-specific query parameters from question.
-
-    Args:
-        question: Natural language question
-
-    Returns:
-        Query parameters dict
-    """
     params: dict[str, Any] = {}
-
-    # Simple extraction - in production, use NER or more sophisticated parsing
     question_lower = question.lower()
-
     if "name" in question_lower or "named" in question_lower:
         params["include_names"] = True
-
     if "address" in question_lower:
         params["include_addresses"] = True
-
     return params
 
 
 def _extract_query_params_idjc(question: str) -> dict[str, Any]:
-    """
-    Extract IDJC-specific query parameters from question.
-
-    Args:
-        question: Natural language question
-
-    Returns:
-        Query parameters dict
-    """
     params: dict[str, Any] = {}
-
     question_lower = question.lower()
-
     if "current" in question_lower or "active" in question_lower:
         params["active_only"] = True
-
     if "offense" in question_lower or "charge" in question_lower:
         params["include_offenses"] = True
-
     return params
 
 
 def _extract_query_params_idoc(question: str) -> dict[str, Any]:
-    """
-    Extract IDOC-specific query parameters from question.
-
-    Args:
-        question: Natural language question
-
-    Returns:
-        Query parameters dict
-    """
     params: dict[str, Any] = {}
-
     question_lower = question.lower()
-
     if "current" in question_lower or "active" in question_lower:
         params["active_only"] = True
-
     if "sentence" in question_lower:
         params["include_sentencing"] = True
-
     if "facility" in question_lower or "location" in question_lower:
         params["include_facility"] = True
-
     return params
-
-
-def _extract_parent_ids(idhw_data: dict[str, Any]) -> list[str]:
-    """
-    Extract parent insight_ids from IDHW family relationship data.
-
-    Used for cross-agency identity matching.
-
-    Args:
-        idhw_data: IDHW query results
-
-    Returns:
-        List of parent insight_ids
-    """
-    parent_ids = []
-
-    relationships = idhw_data.get("relationships", [])
-    for rel in relationships:
-        if isinstance(rel, dict):
-            mother_id = rel.get("mother_insight_id")
-            father_id = rel.get("father_insight_id")
-            if mother_id:
-                parent_ids.append(mother_id)
-            if father_id:
-                parent_ids.append(father_id)
-
-    # Also check family_relationships key
-    family_rels = idhw_data.get("family_relationships", [])
-    for rel in family_rels:
-        if isinstance(rel, dict):
-            mother_id = rel.get("mother_insight_id")
-            father_id = rel.get("father_insight_id")
-            if mother_id:
-                parent_ids.append(mother_id)
-            if father_id:
-                parent_ids.append(father_id)
-
-    # Deduplicate
-    return list(set(parent_ids))
-
-
-def _extract_child_ids(idhw_data: dict[str, Any]) -> list[str]:
-    """
-    Extract child insight_ids from IDHW data.
-
-    Used for cross-agency identity matching.
-
-    Args:
-        idhw_data: IDHW query results
-
-    Returns:
-        List of child insight_ids
-    """
-    child_ids = []
-
-    for child in idhw_data.get("child_records", []):
-        if isinstance(child, dict):
-            key = child.get("insight_id") or child.get("child_insight_id")
-            if key:
-                child_ids.append(key)
-
-    # Deduplicate
-    return list(set(child_ids))

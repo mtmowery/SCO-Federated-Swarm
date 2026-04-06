@@ -86,20 +86,48 @@ class RedisConfig(BaseSettings):
 
 
 class OllamaConfig(BaseSettings):
-    """Ollama local LLM configuration."""
+    """Ollama local LLM configuration.
+
+    Two-model architecture for M3 MacBook:
+      - planner_model (mistral:7b):  Excellent at strict structured output for planning
+      - answer_model  (gemma2:9b):   Excellent at synthesizing multi-source data into prose
+      - default_model:               Fallback / backward-compat alias → planner_model
+    """
 
     base_url: str = Field(
         default="http://localhost:11434", description="Ollama service base URL"
     )
+    # Specialised model per node
+    planner_model: str = Field(
+        default="mistral:7b",
+        description="Model used for planning/routing — excels at strict structured output",
+    )
+    answer_model: str = Field(
+        default="gemma2:9b",
+        description="Model used for answer synthesis — excels at multi-source prose",
+    )
+    # Backward-compat alias so any code still referencing default_model keeps working
     default_model: str = Field(
-        default="llama3:8b", description="Default LLM model name"
+        default="mistral:7b", description="Fallback model alias (same as planner_model)"
     )
     embedding_model: str = Field(
         default="nomic-embed-text", description="Embedding model name"
     )
     embedding_dim: int = Field(default=768, description="Embedding dimension")
+
+    # temperature=0.0 for planner (deterministic routing), small value for answer
+    planner_temperature: float = Field(
+        default=0.0, ge=0.0, le=2.0,
+        description="Temperature for planning node — must be 0 for deterministic routing",
+    )
+    answer_temperature: float = Field(
+        default=0.3, ge=0.0, le=2.0,
+        description="Temperature for answer synthesis — slight variation is acceptable",
+    )
+    # Kept for backward-compat; points at planner_temperature
     temperature: float = Field(
-        default=0.7, ge=0.0, le=2.0, description="Model temperature"
+        default=0.0, ge=0.0, le=2.0,
+        description="Default temperature (0.0 — deterministic). Use planner_temperature / answer_temperature directly.",
     )
     top_p: float = Field(
         default=0.9, ge=0.0, le=1.0, description="Nucleus sampling parameter"

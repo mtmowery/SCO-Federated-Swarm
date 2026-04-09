@@ -168,13 +168,14 @@ def get_graph() -> CompiledStateGraph:
     return _graph
 
 
-async def run_query(question: str, thread_id: str = "default_thread") -> dict[str, Any]:
+async def run_query(question: str, thread_id: str = "default_thread", progress_callback=None) -> dict[str, Any]:
     """
     Run a query through the complete federated AI swarm.
 
     Args:
         question: Natural language question
         thread_id: Conversation thread identifier for memory
+        progress_callback: Optional callable for live node execution updates
 
     Returns:
         Dictionary with answer, confidence, sources, intent, errors, execution_trace.
@@ -202,7 +203,27 @@ async def run_query(question: str, thread_id: str = "default_thread") -> dict[st
 
     try:
         config = {"configurable": {"thread_id": thread_id}}
-        final_state = await graph.ainvoke(initial_state, config=config)
+        
+        if progress_callback:
+            import inspect
+            import asyncio
+            try:
+                # stream_mode="updates" yields {node_name: {state_update_dict}}
+                async for chunk in graph.astream(initial_state, config=config, stream_mode="updates"):
+                    for node_name, state_update in chunk.items():
+                        if inspect.iscoroutinefunction(progress_callback):
+                            await progress_callback(node_name, state_update)
+                        else:
+                            progress_callback(node_name, state_update)
+            except asyncio.CancelledError:
+                raise
+            except Exception as stream_err:
+                logger.error(f"Streaming trace error: {stream_err}")
+                
+            snapshot = graph.get_state(config)
+            final_state = snapshot.values if snapshot else {}
+        else:
+            final_state = await graph.ainvoke(initial_state, config=config)
 
         return {
             "answer": final_state.get("answer", ""),

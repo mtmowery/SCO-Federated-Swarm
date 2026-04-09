@@ -88,11 +88,18 @@ async def _llm_plan(question: str) -> tuple[QueryIntent, list[str], list[AgencyN
 3. Required agencies: list from [idhw, idjc, idoc]
 
 Agency capabilities:
-- idhw: foster care children, family relationships (child_insight_id, mother_insight_id, father_insight_id), child welfare
-- idjc: juvenile detention records, youth offender history — searches by insight_id
-- idoc: adult prison/incarceration records, offender status — searches by insight_id
+- idhw: foster care system, family relationships (child_insight_id, mother_insight_id, father_insight_id), child welfare
+- idjc: juvenile detention records, youth offender history (Handles kids, children, minors)
+- idoc: adult prison/incarceration records, offender status (Handles adults, people, persons)
 
-IMPORTANT DEPENDENCY RULE: If the question involves children in foster care AND records from idjc or idoc, you MUST list idhw FIRST. idhw must run before idjc/idoc so parent insight_ids can be extracted and passed to those agencies.
+ONTOLOGY RULES:
+- If the text asks about "IDJC" and "IDOC", you MUST output `AGENCIES: idjc, idoc`. NEVER include `idhw`.
+- ONLY include `idhw` if the user explicitly types "foster care", "parents", or "health and welfare".
+- "Kids", "Children", "Minors", "Youth", "People", and "Persons" are generic words. Do NOT include IDHW just because these words are used.
+- STRICT INTENT RULE: If the query spans multiple agencies (e.g., idjc and idoc), intent MUST be 'cross_agency'.
+
+DEPENDENCY LOGIC:
+- If and ONLY IF the query deals with foster care (idhw) AND juvenile/adult records, put idhw first in the list.
 
 Question: {question}
 
@@ -101,8 +108,7 @@ INTENT: <intent>
 PLAN:
 - <step 1>
 - <step 2>
-- <step 3>
-AGENCIES: <comma-separated list, idhw always first if present>
+AGENCIES: <comma-separated list of ONLY the specifically requested agencies>
 
 Be concise. Think about what agencies would have relevant data."""
 
@@ -191,26 +197,31 @@ def _keyword_based_routing(question: str) -> tuple[QueryIntent, list[AgencyName]
     """
     question_lower = question.lower()
 
-    # Define keyword patterns for each agency
-    idhw_keywords = ["foster", "child", "welfare", "family", "parent", "guardian", "caregiver"]
+    # Define keyword patterns for each agency (removed generic terms like 'child' to prevent false positives)
+    idhw_keywords = ["foster", "welfare", "family", "parent", "guardian", "caregiver"]
     idjc_keywords = ["juvenile", "youth", "detention", "delinquent", "minor", "teen"]
     idoc_keywords = ["prison", "incarcerat", "offender", "inmate", "sentence", "parole", "felon"]
 
     agencies = []
-
-    # Check for IDHW keywords
-    if any(kw in question_lower for kw in idhw_keywords):
+    
+    # Explicit agency mentions override generic keyword matching
+    if "idhw" in question_lower:
         agencies.append(AgencyName.IDHW)
-
-    # Check for IDJC keywords
-    if any(kw in question_lower for kw in idjc_keywords):
+    if "idjc" in question_lower:
         agencies.append(AgencyName.IDJC)
-
-    # Check for IDOC keywords
-    if any(kw in question_lower for kw in idoc_keywords):
+    if "idoc" in question_lower:
         agencies.append(AgencyName.IDOC)
 
-    # Default to all agencies if no keywords match
+    # Fall back to keywords if no explicit agency mentions
+    if not agencies:
+        if any(kw in question_lower for kw in idhw_keywords):
+            agencies.append(AgencyName.IDHW)
+        if any(kw in question_lower for kw in idjc_keywords):
+            agencies.append(AgencyName.IDJC)
+        if any(kw in question_lower for kw in idoc_keywords):
+            agencies.append(AgencyName.IDOC)
+
+    # Default to all agencies if nothing matches
     if not agencies:
         agencies = list(AgencyName)
 

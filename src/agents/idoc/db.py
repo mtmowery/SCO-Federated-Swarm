@@ -121,9 +121,12 @@ async def check_incarceration(insight_ids: list[str]) -> dict[str, bool]:
         )
         result = await session.execute(stmt)
         records = result.scalars().all()
-
-        # Return records as dicts so callers can extract insight_id for CrossAgencyReasoner
-        return [record.to_dict() for record in records]
+        
+        # Get active insight IDs
+        active_ids = {record.insight_id for record in records}
+        
+        # Return boolean dict for all requested IDs
+        return {iid: (iid in active_ids) for iid in insight_ids}
 
 
 async def count_incarcerated_from_ids(insight_ids: list[str]) -> int:
@@ -181,19 +184,28 @@ async def get_active_offenders(limit: int = 1000, offset: int = 0) -> list[dict]
         return [record.to_dict() for record in records]
 
 
-async def get_offense_summary() -> dict[str, int]:
+async def get_offense_summary(keyword: Optional[str] = None) -> dict[str, int]:
     """
-    Aggregate sentence counts by crime group.
+    Aggregate sentence counts by crime group or specific offense.
+
+    Args:
+        keyword: Optional offense descriptive string to match via ILIKE
 
     Returns:
-        Dict mapping crime_group_desc to count of sentences
+        Dict mapping offense description to count of distinct people
     """
     session_maker = await get_pg_session("idoc")
 
     async with session_maker() as session:
+        # If keyword provided, group by the specific long desc, else group by crime group
+        group_col = IDOCSentence.off_ldesc if keyword else IDOCSentence.crm_grp_desc
         stmt = select(
-            IDOCSentence.crm_grp_desc, func.count(IDOCSentence.id).label("count")
-        ).group_by(IDOCSentence.crm_grp_desc)
+            group_col, func.count(func.distinct(IDOCSentence.insight_id)).label("count")
+        )
+        if keyword:
+            stmt = stmt.where(IDOCSentence.off_ldesc.ilike(f"%{keyword}%"))
+            
+        stmt = stmt.group_by(group_col)
         result = await session.execute(stmt)
         rows = result.all()
 
@@ -276,3 +288,35 @@ async def search_sentences(filters: dict[str, Any]) -> list[dict]:
         records = result.scalars().all()
 
         return [record.to_dict() for record in records]
+
+
+async def count_total_people() -> int:
+    """
+    Count the total number of unique people (insight_ids) in the IDOC database.
+
+    Returns:
+        Count of distinct insight_ids
+    """
+    session_maker = await get_pg_session("idoc")
+
+    async with session_maker() as session:
+        stmt = select(func.count(func.distinct(IDOCSentence.insight_id)))
+        result = await session.execute(stmt)
+        count = result.scalar()
+
+        return count or 0
+
+
+async def get_all_insight_ids() -> list[str]:
+    """
+    Get all unique insight_ids in the adult corrections system.
+
+    Returns:
+        List of insight_id strings
+    """
+    session_maker = await get_pg_session("idoc")
+
+    async with session_maker() as session:
+        stmt = select(IDOCSentence.insight_id).distinct().where(IDOCSentence.insight_id.is_not(None))
+        result = await session.execute(stmt)
+        return list(result.scalars().all())

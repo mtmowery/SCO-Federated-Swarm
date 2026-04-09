@@ -177,10 +177,18 @@ class MCPClient:
                 response = await client.request(method, url, **kwargs)
                 response.raise_for_status()
                 return response
-            except (httpx.HTTPError, httpx.TimeoutException) as e:
+            except httpx.HTTPStatusError as e:
+                # Fail fast for client errors that won't resolve with a retry
+                if e.response.status_code in (404, 400, 422):
+                    raise e
                 last_error = e
                 if attempt < self.max_retries - 1:
-                    # Exponential backoff: 1s, 2s, 4s
+                    wait_time = 2 ** attempt
+                    logger.debug(f"Request to {url} failed with {e.response.status_code}, retrying in {wait_time}s")
+                    await asyncio.sleep(wait_time)
+            except (httpx.RequestError, httpx.TimeoutException) as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
                     wait_time = 2 ** attempt
                     logger.debug(
                         f"Request to {url} failed (attempt {attempt + 1}/{self.max_retries}), "

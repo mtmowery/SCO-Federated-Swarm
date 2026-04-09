@@ -139,23 +139,31 @@ async def get_commitments_by_county(
         return [c.to_dict() for c in commitments]
 
 
-async def get_offense_summary() -> dict[str, int]:
+async def get_offense_summary(keyword: Optional[str] = None) -> dict[str, int]:
     """
-    Get aggregate counts by offense category.
+    Get aggregate counts by offense category or specific offense description.
+
+    Args:
+        keyword: Optional descriptive keyword mapped to ILIKE filters
 
     Returns:
-        Dictionary mapping offense_category to count
+        Dictionary mapping offense classification to distinct people insight_ids count
     """
     async with pg_session_context("idjc") as session:
-        query = (
-            select(IDJCCommitment.offense_category, func.count(IDJCCommitment.id))
-            .where(IDJCCommitment.offense_category.isnot(None))
-            .group_by(IDJCCommitment.offense_category)
-            .order_by(desc(func.count(IDJCCommitment.id)))
-        )
+        group_col = IDJCCommitment.offense_description if keyword else IDJCCommitment.offense_category
+        
+        query = select(group_col, func.count(func.distinct(IDJCCommitment.insight_id)))
+        
+        if keyword:
+            query = query.where(IDJCCommitment.offense_description.ilike(f"%{keyword}%"))
+        else:
+            query = query.where(group_col.isnot(None))
+            
+        query = query.group_by(group_col).order_by(desc(func.count(func.distinct(IDJCCommitment.insight_id))))
+        
         result = await session.execute(query)
         rows = result.all()
-        return {category: count for category, count in rows}
+        return {classification or "Unknown": count for classification, count in rows}
 
 
 async def count_by_status() -> dict[str, int]:
@@ -174,6 +182,28 @@ async def count_by_status() -> dict[str, int]:
         result = await session.execute(query)
         rows = result.all()
         return {status: count for status, count in rows}
+
+
+async def get_top_offenders(limit: int = 10) -> list[dict[str, Any]]:
+    """
+    Get top individuals in IDJC with the most offenses.
+
+    Args:
+        limit: Max number of people to return.
+
+    Returns:
+        List of dictionaries containing insight_id and offense_count.
+    """
+    async with pg_session_context("idjc") as session:
+        query = (
+            select(IDJCCommitment.insight_id, func.count(IDJCCommitment.id).label("offense_count"))
+            .group_by(IDJCCommitment.insight_id)
+            .order_by(desc("offense_count"))
+            .limit(limit)
+        )
+        result = await session.execute(query)
+        rows = result.all()
+        return [{"insight_id": insight_id, "offense_count": count} for insight_id, count in rows]
 
 
 async def check_juvenile_record(insight_ids: list[str]) -> dict[str, bool]:
@@ -278,3 +308,30 @@ async def search_commitments(filters: dict[str, Any]) -> list[dict[str, Any]]:
         result = await session.execute(query)
         commitments = result.scalars().all()
         return [c.to_dict() for c in commitments]
+
+
+async def count_total_people() -> int:
+    """
+    Count the total number of unique people (insight_ids) in the IDJC database.
+
+    Returns:
+        Count of distinct insight_ids
+    """
+    async with pg_session_context("idjc") as session:
+        query = select(func.count(func.distinct(IDJCCommitment.insight_id)))
+        result = await session.execute(query)
+        count = result.scalar()
+        return count or 0
+
+
+async def get_all_insight_ids() -> list[str]:
+    """
+    Get all unique insight_ids in the juvenile corrections system.
+
+    Returns:
+        List of insight_id strings
+    """
+    async with pg_session_context("idjc") as session:
+        query = select(IDJCCommitment.insight_id).distinct().where(IDJCCommitment.insight_id.is_not(None))
+        result = await session.execute(query)
+        return list(result.scalars().all())

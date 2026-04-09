@@ -164,6 +164,29 @@ async def get_offense_summary() -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_offense_breakdown(keyword: str) -> dict[str, Any]:
+    """
+    Get aggregate statistics of sentences for a specific offense keyword.
+
+    Returns aggregate counts for specific types matching a keyword.
+
+    Args:
+        keyword: The offense to filter by (e.g. 'murder')
+
+    Returns:
+        Dict with off_ldesc mapped to counts of distinct individuals
+    """
+    summary = await db.get_offense_summary(keyword)
+    total = sum(summary.values())
+
+    return {
+        "total_people": total,
+        "crime_types": len(summary),
+        "by_type": summary,
+    }
+
+
+@mcp.tool()
 async def count_by_status() -> dict[str, Any]:
     """
     Get sentence counts grouped by sentence status.
@@ -207,3 +230,32 @@ async def search_sentences(filters: dict[str, Any]) -> dict[str, Any]:
         "filters": filters,
         "sentences": sentences,
     }
+
+
+@mcp.tool()
+async def count_total_people() -> dict[str, Any]:
+    """
+    Count the total number of unique people (insight_ids) in the IDOC database.
+
+    Returns:
+        Dict with total_people_count
+    """
+    count = await db.count_total_people()
+
+    return {
+        "total_people_count": count
+    }
+
+
+@mcp.tool()
+async def get_all_insight_ids() -> dict[str, Any]:
+    """
+    Get all unique insight_ids from IDOC.
+    Returns array of all insight_id strings.
+    """
+    try:
+        ids = await db.get_all_insight_ids()
+        return {"insight_ids": ids}
+    except Exception as e:
+        logger.error(f"Error fetching all insight IDs: {e}")
+        return {"error": str(e), "insight_ids": []}

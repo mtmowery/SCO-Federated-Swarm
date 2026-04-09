@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from shared.schemas import InsightState
+from shared.schemas import InsightState, QueryIntent, AgencyName
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class RelationshipEdge:
     """An edge in the ephemeral relationship graph."""
     source_id: str
     target_id: str
-    relationship_type: str  # HAS_MOTHER, HAS_FATHER, INCARCERATED, JUVENILE_RECORD
+    relationship_type: str  # IN_AGENCY, PARENT_OF
     source_agency: str
     confidence: float = 1.0
     metadata: dict = field(default_factory=dict)
@@ -95,15 +95,14 @@ class CrossAgencyReasoner:
 
     def build_family_graph(self, idhw_data: dict) -> None:
         """
-        Build family relationship subgraph from IDHW data.
-
-        Expects idhw_data to contain 'children' or 'family_relationships'
-        with child/mother/father insight_id mappings.
+        Build family relationship subgraph from IDHW data using minimalist schema.
         """
         relationships = idhw_data.get("family_relationships", idhw_data.get("children", []))
-
         if isinstance(relationships, dict) and "records" in relationships:
             relationships = relationships["records"]
+
+        # Ensure IDHW Agency node
+        self.graph.add_node("IDHW", {"type": "Agency", "agency_id": "IDHW"})
 
         for record in relationships:
             child_id = record.get("child_insight_id") or record.get("insight_id")
@@ -113,106 +112,91 @@ class CrossAgencyReasoner:
             if not child_id:
                 continue
 
-            # Add child node
+            # Add child Person node
             self.graph.add_node(child_id, {
-                "type": "child",
-                "agency": "IDHW",
-                "first_name": record.get("first_name"),
-                "last_name": record.get("last_name"),
-                "dob": record.get("dob"),
-                "start_care_date": record.get("start_care_date"),
-                "end_care_date": record.get("end_care_date"),
-                "end_reason": record.get("end_reason"),
+                "type": "Person",
+                "insight_id": child_id,
+                "gender": record.get("gender"),
+                "dob": record.get("dob"), # dob split into year/month in loader, here keeping for context
+                "dob_year": record.get("dob_year"),
+                "dob_month": record.get("dob_month"),
             })
 
-            # Add mother edge
+            # Link child to IDHW Agency
+            self.graph.add_edge(RelationshipEdge(
+                source_id="IDHW",
+                target_id=child_id,
+                relationship_type="IN_AGENCY",
+                source_agency="IDHW"
+            ))
+
+            # Add mother link
             if mother_id:
-                self.graph.add_node(mother_id, {
-                    "type": "parent",
-                    "role": "mother",
-                    "agency": "IDHW",
-                })
+                self.graph.add_node(mother_id, {"type": "Person", "insight_id": mother_id})
                 self.graph.add_edge(RelationshipEdge(
-                    source_id=child_id,
-                    target_id=mother_id,
-                    relationship_type="HAS_MOTHER",
+                    source_id=mother_id,
+                    target_id=child_id,
+                    relationship_type="PARENT_OF",
                     source_agency="IDHW",
                 ))
 
-            # Add father edge
+            # Add father link
             if father_id:
-                self.graph.add_node(father_id, {
-                    "type": "parent",
-                    "role": "father",
-                    "agency": "IDHW",
-                })
+                self.graph.add_node(father_id, {"type": "Person", "insight_id": father_id})
                 self.graph.add_edge(RelationshipEdge(
-                    source_id=child_id,
-                    target_id=father_id,
-                    relationship_type="HAS_FATHER",
+                    source_id=father_id,
+                    target_id=child_id,
+                    relationship_type="PARENT_OF",
                     source_agency="IDHW",
                 ))
 
     def add_incarceration_data(self, idoc_data: dict) -> None:
         """
-        Overlay incarceration status onto the graph from IDOC data.
-
-        Expects idoc_data with 'incarcerated_ids' list or 'sentences' records.
+        Overlay IDOC agency links onto Persons.
         """
         incarcerated_ids = set()
-
-        # Handle different response formats
         if "incarcerated_ids" in idoc_data:
             incarcerated_ids = set(idoc_data["incarcerated_ids"])
         elif "records" in idoc_data:
             for record in idoc_data["records"]:
-                status = record.get("sent_status", "").upper()
-                if status not in ("DISCHARGED", ""):
-                    incarcerated_ids.add(record.get("insight_id"))
-        elif "results" in idoc_data:
-            incarcerated_ids = set(idoc_data["results"])
+                incarcerated_ids.add(record.get("insight_id"))
+
+        # Ensure IDOC Agency node
+        self.graph.add_node("IDOC", {"type": "Agency", "agency_id": "IDOC"})
 
         for insight_id in incarcerated_ids:
             if not insight_id:
                 continue
-            self.graph.add_node(insight_id, {
-                "incarcerated": True,
-                "agency": "IDOC",
-            })
+            self.graph.add_node(insight_id, {"type": "Person", "insight_id": insight_id})
             self.graph.add_edge(RelationshipEdge(
-                source_id=insight_id,
+                source_id="IDOC",
                 target_id=insight_id,
-                relationship_type="INCARCERATED",
+                relationship_type="IN_AGENCY",
                 source_agency="IDOC",
             ))
 
     def add_juvenile_data(self, idjc_data: dict) -> None:
         """
-        Overlay juvenile commitment data onto the graph from IDJC.
-
-        Expects idjc_data with 'juvenile_ids' list or 'commitments' records.
+        Overlay IDJC agency links onto Persons.
         """
         juvenile_ids = set()
-
         if "juvenile_ids" in idjc_data:
             juvenile_ids = set(idjc_data["juvenile_ids"])
         elif "records" in idjc_data:
             for record in idjc_data["records"]:
                 juvenile_ids.add(record.get("insight_id"))
-        elif "results" in idjc_data:
-            juvenile_ids = set(idjc_data["results"])
+
+        # Ensure IDJC Agency node
+        self.graph.add_node("IDJC", {"type": "Agency", "agency_id": "IDJC"})
 
         for insight_id in juvenile_ids:
             if not insight_id:
                 continue
-            self.graph.add_node(insight_id, {
-                "juvenile_record": True,
-                "agency": "IDJC",
-            })
+            self.graph.add_node(insight_id, {"type": "Person", "insight_id": insight_id})
             self.graph.add_edge(RelationshipEdge(
-                source_id=insight_id,
+                source_id="IDJC",
                 target_id=insight_id,
-                relationship_type="JUVENILE_RECORD",
+                relationship_type="IN_AGENCY",
                 source_agency="IDJC",
             ))
 
@@ -220,104 +204,106 @@ class CrossAgencyReasoner:
 
     def count_children_with_incarcerated_parents(self) -> dict[str, Any]:
         """
-        Core cross-agency query: How many foster children have
-        at least one incarcerated parent?
-
-        Traversal: Child -> HAS_MOTHER/HAS_FATHER -> Parent -> INCARCERATED
+        Traversal: Agency(IDHW) -> Child -> PARENT_OF <- Parent <- Agency(IDOC)
         """
-        incarcerated_nodes = {
-            e.source_id
-            for e in self.graph.get_all_of_type("INCARCERATED")
-        }
+        foster_ids = {e.target_id for e in self.graph.get_neighbors("IDHW", "IN_AGENCY")}
+        idoc_ids = {e.target_id for e in self.graph.get_neighbors("IDOC", "IN_AGENCY")}
 
-        children_with_incarcerated = []
-        total_children = 0
-
-        for node_id, attrs in self.graph.nodes.items():
-            if attrs.get("type") != "child":
-                continue
-            total_children += 1
-
-            parent_edges = (
-                self.graph.get_neighbors(node_id, "HAS_MOTHER") +
-                self.graph.get_neighbors(node_id, "HAS_FATHER")
-            )
-
-            for edge in parent_edges:
-                if edge.target_id in incarcerated_nodes:
-                    children_with_incarcerated.append({
-                        "child_id": node_id,
-                        "parent_id": edge.target_id,
-                        "relationship": edge.relationship_type,
-                    })
-                    break  # Count child once even if both parents incarcerated
+        found = []
+        for child_id in foster_ids:
+            # Look for edges pointing TO this child (to find parents)
+            # Adjacency is source->target. Parents are sources of PARENT_OF
+            for parent_id, attrs in self.graph.nodes.items():
+                if parent_id == child_id or attrs.get("type") != "Person":
+                    continue
+                
+                # Check if this node is a parent of the child
+                parent_of_edges = self.graph.get_neighbors(parent_id, "PARENT_OF")
+                for e in parent_of_edges:
+                    if e.target_id == child_id and parent_id in idoc_ids:
+                        found.append({"child_id": child_id, "parent_id": parent_id})
+                        break
 
         return {
-            "count": len(children_with_incarcerated),
-            "total_children": total_children,
-            "details": children_with_incarcerated,
-            "incarcerated_parent_count": len(incarcerated_nodes),
+            "count": len(found),
+            "total_foster": len(foster_ids),
+            "details": found,
+        }
+
+    def count_foster_kids_with_foster_parents_in_idoc(self) -> dict[str, Any]:
+        """
+        Traversal: Agency(IDHW) -> Child <- PARENT_OF - Parent <- Agency(IDOC)
+                                                            ^
+                                                            |-- Agency(IDHW)
+        """
+        foster_ids = {e.target_id for e in self.graph.get_neighbors("IDHW", "IN_AGENCY")}
+        idoc_ids = {e.target_id for e in self.graph.get_neighbors("IDOC", "IN_AGENCY")}
+
+        found = []
+        for child_id in foster_ids:
+            for parent_id, attrs in self.graph.nodes.items():
+                if parent_id == child_id or attrs.get("type") != "Person":
+                    continue
+                parent_of_edges = self.graph.get_neighbors(parent_id, "PARENT_OF")
+                for e in parent_of_edges:
+                    if e.target_id == child_id and parent_id in idoc_ids and parent_id in foster_ids:
+                        found.append({"child_id": child_id, "parent_id": parent_id})
+                        break
+
+        return {
+            "count": len(found),
+            "total_foster": len(foster_ids),
+            "details": found,
         }
 
     def count_incarcerated_with_foster_children(self) -> dict[str, Any]:
         """
-        Bidirectional query: How many incarcerated individuals
-        have children in foster care?
+        Traversal: Agency(IDOC) -> Parent -> PARENT_OF -> Child <- Agency(IDHW)
         """
-        incarcerated_nodes = {
-            e.source_id
-            for e in self.graph.get_all_of_type("INCARCERATED")
-        }
+        idoc_ids = {e.target_id for e in self.graph.get_neighbors("IDOC", "IN_AGENCY")}
+        foster_ids = {e.target_id for e in self.graph.get_neighbors("IDHW", "IN_AGENCY")}
 
-        # Find parents who are both connected to children AND incarcerated
-        incarcerated_parents = set()
-        parent_to_children: dict[str, list[str]] = defaultdict(list)
-
-        for node_id, attrs in self.graph.nodes.items():
-            if attrs.get("type") != "child":
-                continue
-            parent_edges = (
-                self.graph.get_neighbors(node_id, "HAS_MOTHER") +
-                self.graph.get_neighbors(node_id, "HAS_FATHER")
-            )
-            for edge in parent_edges:
-                if edge.target_id in incarcerated_nodes:
-                    incarcerated_parents.add(edge.target_id)
-                    parent_to_children[edge.target_id].append(node_id)
+        found = defaultdict(list)
+        for parent_id in idoc_ids:
+            parent_of_edges = self.graph.get_neighbors(parent_id, "PARENT_OF")
+            for e in parent_of_edges:
+                if e.target_id in foster_ids:
+                    found[parent_id].append(e.target_id)
 
         return {
-            "count": len(incarcerated_parents),
-            "total_incarcerated": len(incarcerated_nodes),
-            "details": [
-                {"parent_id": pid, "children": cids}
-                for pid, cids in parent_to_children.items()
-            ],
+            "count": len(found),
+            "total_incarcerated": len(idoc_ids),
+            "details": [{"parent_id": pid, "children": cids} for pid, cids in found.items()],
         }
 
     def count_foster_youth_with_juvenile_record(self) -> dict[str, Any]:
         """
-        Cross-agency: How many foster children also have juvenile
-        detention records?
+        Traversal: Agency(IDHW) -> Person <- Agency(IDJC)
         """
-        juvenile_nodes = {
-            e.source_id
-            for e in self.graph.get_all_of_type("JUVENILE_RECORD")
-        }
+        foster_ids = {e.target_id for e in self.graph.get_neighbors("IDHW", "IN_AGENCY")}
+        idjc_ids = {e.target_id for e in self.graph.get_neighbors("IDJC", "IN_AGENCY")}
 
-        foster_with_juvenile = []
-        total_children = 0
-
-        for node_id, attrs in self.graph.nodes.items():
-            if attrs.get("type") != "child":
-                continue
-            total_children += 1
-            if node_id in juvenile_nodes:
-                foster_with_juvenile.append(node_id)
+        overlap = foster_ids.intersection(idjc_ids)
 
         return {
-            "count": len(foster_with_juvenile),
-            "total_children": total_children,
-            "ids": foster_with_juvenile,
+            "count": len(overlap),
+            "total_foster": len(foster_ids),
+            "ids": list(overlap),
+        }
+
+    def count_juveniles_with_adult_records(self) -> dict[str, Any]:
+        """
+        Traversal: Agency(IDJC) -> Person <- Agency(IDOC)
+        """
+        idjc_ids = {e.target_id for e in self.graph.get_neighbors("IDJC", "IN_AGENCY")}
+        idoc_ids = {e.target_id for e in self.graph.get_neighbors("IDOC", "IN_AGENCY")}
+
+        overlap = idjc_ids.intersection(idoc_ids)
+
+        return {
+            "count": len(overlap),
+            "total_juvenile": len(idjc_ids),
+            "ids": list(overlap),
         }
 
     def compute_family_risk_network(self, insight_id: str) -> dict[str, Any]:
@@ -425,9 +411,91 @@ async def reasoning_node(state: InsightState) -> dict:
     # Determine which computation to run based on the question and plan
     question = state.get("question", "").lower()
     plan = state.get("plan", [])
+    intent = state.get("intent")
+    agencies = state.get("agencies", [])
     result: dict[str, Any] = {}
+    
+    # Safely convert to string values robustly if passed as enum or string via state checkpointing
+    intent_raw = getattr(intent, "value", intent)
+    intent_val = str(intent_raw).split(".")[-1].lower()
+    
+    agency_vals = []
+    for a in agencies:
+        val = getattr(a, "value", a)
+        agency_vals.append(str(val).split(".")[-1].lower())
 
-    if _is_foster_incarceration_query(question, plan):
+    if (intent_val in ("statistics", "single_agency", "lookup") or "breakdown" in question or "murder" in question or "theft" in question) and len(agency_vals) == 1:
+        agency = agency_vals[0]
+        count = 0
+        breakdown: dict[str, Any] = {}
+        total_records = 0
+
+        if agency == "idhw" and idhw_data:
+            stats = idhw_data.get("statistics", {})
+            if stats:
+                # Use accurate DB-level counts from get_stats
+                count = stats.get("children", 0) or stats.get("total_records", 0)
+                breakdown = stats
+            else:
+                count = len(idhw_data.get("child_records", []))
+                if not count:
+                    count = len(idhw_data.get("family_relationships", []))
+
+        elif agency == "idjc" and idjc_data:
+            stats = idjc_data.get("statistics", {})
+            if stats:
+                # Use accurate DB-level counts: total unique people
+                count = stats.get("total_people", 0)
+                total_records = stats.get("total_records", 0)
+                breakdown = stats.get("by_status", {})
+                
+                # Check for intercepted offense breakdown outputs
+                if "offense_breakdown" in stats:
+                    offense_stats = stats["offense_breakdown"]
+                    breakdown = offense_stats.get("by_type", {})
+                    count = offense_stats.get("total_people", 0)
+                elif "top_offenders" in stats:
+                    breakdown = {"top_offenders": stats["top_offenders"]}
+            else:
+                # Fallback: count unique insight_ids from commitments
+                seen_ids = set()
+                for r in idjc_data.get("commitments", []):
+                    if isinstance(r, dict) and r.get("insight_id"):
+                        seen_ids.add(r["insight_id"])
+                count = len(seen_ids) if seen_ids else len(idjc_data.get("juvenile_ids", []))
+
+        elif agency == "idoc" and idoc_data:
+            stats = idoc_data.get("statistics", {})
+            if stats:
+                count = stats.get("total_people", 0)
+                total_records = stats.get("total_records", 0)
+                breakdown = stats.get("by_status", {})
+                
+                # Check for intercepted offense breakdown outputs
+                if "offense_breakdown" in stats:
+                    offense_stats = stats["offense_breakdown"]
+                    breakdown = offense_stats.get("by_type", {})
+                    count = offense_stats.get("total_people", 0)
+            else:
+                seen_ids = set()
+                for r in idoc_data.get("inmates", []):
+                    if isinstance(r, dict) and r.get("insight_id"):
+                        seen_ids.add(r["insight_id"])
+                count = len(seen_ids) if seen_ids else len(idoc_data.get("incarcerated_ids", []))
+
+        result = {
+            "query_type": "single_agency_statistics",
+            "count": count,
+            "total_records": total_records,
+            "breakdown": breakdown,
+            "agency": agency,
+        }
+
+    elif _is_foster_parents_in_idoc_query(question, plan):
+        result = reasoner.count_foster_kids_with_foster_parents_in_idoc()
+        result["query_type"] = "foster_kids_with_foster_parents_in_idoc"
+
+    elif _is_foster_incarceration_query(question, plan):
         result = reasoner.count_children_with_incarcerated_parents()
         result["query_type"] = "foster_children_with_incarcerated_parents"
 
@@ -438,6 +506,10 @@ async def reasoning_node(state: InsightState) -> dict:
     elif _is_foster_juvenile_query(question, plan):
         result = reasoner.count_foster_youth_with_juvenile_record()
         result["query_type"] = "foster_youth_with_juvenile_record"
+
+    elif _is_juvenile_incarceration_query(question, plan):
+        result = reasoner.count_juveniles_with_adult_records()
+        result["query_type"] = "juvenile_youth_with_adult_record"
 
     else:
         # Generic: try all and return whichever has data
@@ -452,7 +524,11 @@ async def reasoning_node(state: InsightState) -> dict:
             }
 
     # Add confidence and graph metadata
-    confidence = reasoner.compute_confidence(result)
+    if result.get("query_type") == "single_agency_statistics":
+        confidence = 0.95
+    else:
+        confidence = reasoner.compute_confidence(result)
+        
     result["confidence"] = confidence
     result["graph_stats"] = {
         "nodes": reasoner.graph.node_count,
@@ -483,6 +559,10 @@ async def reasoning_node(state: InsightState) -> dict:
 
 # ── Helper functions for query routing ──────────────────────────
 
+def _is_foster_parents_in_idoc_query(question: str, plan: list) -> bool:
+    text = question + " " + " ".join(plan).lower()
+    return "foster" in text and "parent" in text and ("idoc" in text or "adult" in text) and "also" in text
+
 def _is_foster_incarceration_query(question: str, plan: list) -> bool:
     foster_terms = {"foster", "child", "children", "kid"}
     prison_terms = {"prison", "incarcerat", "jail", "locked up"}
@@ -500,3 +580,10 @@ def _is_foster_juvenile_query(question: str, plan: list) -> bool:
     juvenile_terms = {"juvenile", "detention", "youth"}
     text = question + " " + " ".join(plan).lower()
     return any(t in text for t in foster_terms) and any(t in text for t in juvenile_terms)
+
+
+def _is_juvenile_incarceration_query(question: str, plan: list) -> bool:
+    juvenile_terms = {"juvenile", "detention", "youth", "idjc"}
+    prison_terms = {"prison", "incarcerat", "jail", "locked up", "adult", "idoc"}
+    text = question + " " + " ".join(plan).lower()
+    return any(t in text for t in juvenile_terms) and any(t in text for t in prison_terms)

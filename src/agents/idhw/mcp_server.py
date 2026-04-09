@@ -213,10 +213,9 @@ async def list_tools() -> dict[str, Any]:
                 "parameters": {
                     "person_type": {"type": "string", "description": "Filter by person type"},
                     "agency_id": {"type": "string", "description": "Filter by agency"},
-                    "first_name": {"type": "string", "description": "Partial first name match"},
-                    "last_name": {"type": "string", "description": "Partial last name match"},
+                    "dob_month": {"type": "string", "description": "Filter by dob month (01-12)"},
+                    "dob_year": {"type": "string", "description": "Filter by dob year (YYYY)"},
                     "gender": {"type": "string", "description": "Filter by gender"},
-                    "ssn": {"type": "string", "description": "Filter by social security number"},
                     "end_reason": {"type": "string", "description": "Filter by end reason"},
                 },
             },

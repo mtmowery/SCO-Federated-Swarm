@@ -142,6 +142,29 @@ async def get_active_commitments(
 
 
 @mcp.tool()
+async def get_top_offenders(limit: int = 10) -> dict[str, Any]:
+    """
+    Get top individuals in IDJC with the most offenses.
+
+    Args:
+        limit: Max number of people to return.
+
+    Returns:
+        Dictionary with 'top_offenders' list containing insight_id and offense_count.
+    """
+    try:
+        top_offenders = await db.get_top_offenders(limit=limit)
+        logger.info(f"Retrieved top {limit} offenders")
+        return {
+            "top_offenders": top_offenders,
+            "count": len(top_offenders)
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving top offenders: {e}")
+        return {"error": str(e), "top_offenders": []}
+
+
+@mcp.tool()
 async def check_juvenile_record(insight_ids: list[str]) -> dict[str, Any]:
     """
     Check which insight_ids have juvenile records in IDJC.
@@ -175,6 +198,20 @@ async def check_juvenile_record(insight_ids: list[str]) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_all_insight_ids() -> dict[str, Any]:
+    """
+    Get all unique insight_ids from IDJC.
+    Returns array of all insight_id strings.
+    """
+    try:
+        ids = await db.get_all_insight_ids()
+        return {"insight_ids": ids}
+    except Exception as e:
+        logger.error(f"Error fetching all insight IDs: {e}")
+        return {"error": str(e), "insight_ids": []}
+
+
+@mcp.tool()
 async def get_offense_summary() -> dict[str, Any]:
     """
     Get aggregate counts by offense category.
@@ -190,12 +227,37 @@ async def get_offense_summary() -> dict[str, Any]:
         total = sum(summary.values())
         logger.info(f"Offense summary: {len(summary)} categories, {total} total records")
         return {
-            "summary": summary,
-            "category_count": len(summary),
-            "total_records": total,
+            "total_sentences": total,
+            "crime_groups": len(summary),
+            "by_group": summary,
         }
     except Exception as e:
         logger.error(f"Error retrieving offense summary: {e}")
+        return {"error": str(e), "summary": {}}
+
+@mcp.tool()
+async def get_offense_breakdown(keyword: str) -> dict[str, Any]:
+    """
+    Get aggregate statistics of sentences for a specific offense keyword in IDJC.
+
+    Returns aggregate counts for specific types matching a keyword.
+
+    Args:
+        keyword: The offense to filter by (e.g. 'theft')
+
+    Returns:
+        Dict with offense_description mapped to counts of distinct individuals
+    """
+    try:
+        summary = await db.get_offense_summary(keyword)
+        total = sum(summary.values())
+        return {
+            "total_people": total,
+            "crime_types": len(summary),
+            "by_type": summary,
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving offense breakdown: {e}")
         return {"error": str(e), "summary": {}}
 
 
@@ -292,3 +354,20 @@ async def search_commitments(
     except Exception as e:
         logger.error(f"Error searching commitments: {e}")
         return {"error": str(e), "commitments": []}
+
+
+@mcp.tool()
+async def count_total_people() -> dict[str, Any]:
+    """
+    Count the total number of unique people (insight_ids) in the IDJC database.
+
+    Returns:
+        Dictionary with 'total_people_count'
+    """
+    try:
+        count = await db.count_total_people()
+        logger.info(f"Total people in IDJC: {count}")
+        return {"total_people_count": count}
+    except Exception as e:
+        logger.error(f"Error counting people: {e}")
+        return {"error": str(e), "total_people_count": 0}

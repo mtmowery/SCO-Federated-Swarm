@@ -65,20 +65,28 @@ class GraphMemory:
 
     # ── Schema Setup ────────────────────────────────────────────
 
+    # ── Schema Setup ────────────────────────────────────────────
     async def create_constraints_and_indexes(self) -> None:
-        """Create Neo4j constraints and indexes for the graph model."""
+        """Create Neo4j constraints and indexes for the refined minimalist model."""
         async with self.driver.session(database=self._database) as session:
-            constraints = [
+            setup_commands = [
+                # Unique constraint on Person insight_id
                 "CREATE CONSTRAINT person_insight_id IF NOT EXISTS "
                 "FOR (p:Person) REQUIRE p.insight_id IS UNIQUE",
 
-                "CREATE INDEX person_agency IF NOT EXISTS "
-                "FOR (p:Person) ON (p.agency_source)",
+                # Unique constraint on Agency agency_id
+                "CREATE CONSTRAINT agency_id_unique IF NOT EXISTS "
+                "FOR (a:Agency) REQUIRE a.agency_id IS UNIQUE",
 
-                "CREATE INDEX person_type IF NOT EXISTS "
-                "FOR (p:Person) ON (p.person_type)",
+                # Unique constraint on County name
+                "CREATE CONSTRAINT county_name_unique IF NOT EXISTS "
+                "FOR (c:County) REQUIRE c.name IS UNIQUE",
+
+                # Indexes for faster trait-based matching if needed
+                "CREATE INDEX person_traits IF NOT EXISTS "
+                "FOR (p:Person) ON (p.dob_year, p.dob_month, p.gender)",
             ]
-            for cypher in constraints:
+            for cypher in setup_commands:
                 try:
                     await session.run(cypher)
                 except Exception as e:
@@ -88,131 +96,153 @@ class GraphMemory:
 
     # ── Data Loading ────────────────────────────────────────────
 
+    def _extract_active_years(self, start_dt: str | None, end_dt: str | None) -> list[int]:
+        """Extract a list of active years between two date strings."""
+        import re
+        years = set()
+        for dt in (start_dt, end_dt):
+            if dt:
+                match = re.search(r'\b(19|20)\d{2}\b', str(dt))
+                if match:
+                    years.add(int(match.group(0)))
+        if len(years) == 2:
+            return list(range(min(years), max(years) + 1))
+        return list(years)
+
+    async def _ensure_agency(self, session, agency_id: str) -> None:
+        """Ensure an Agency node exists."""
+        await session.run(
+            "MERGE (a:Agency {agency_id: $agency_id})",
+            agency_id=agency_id
+        )
+
     async def load_idhw_persons(self, records: list[dict]) -> int:
         """
         Load IDHW person nodes and family relationships.
-
-        Creates :Person nodes with :Child label for children,
-        and HAS_MOTHER / HAS_FATHER relationships.
+        Refined Schema: Person(insight_id, dob_year, dob_month, gender), Agency(IDHW), IN_AGENCY, PARENT_OF.
         """
         count = 0
         async with self.driver.session(database=self._database) as session:
+            # Ensure IDHW Agency node
+            await self._ensure_agency(session, "IDHW")
+
             for record in records:
                 insight_id = record.get("insight_id")
                 if not insight_id:
                     continue
 
-                person_type = record.get("person_type", "unknown")
-                labels = ":Person:Child" if person_type == "child" else ":Person"
-
-                # Upsert person node
+                # Upsert minimalist person node
                 await session.run(
-                    f"MERGE (p{labels} {{insight_id: $insight_id}}) "
+                    "MERGE (p:Person {insight_id: $insight_id}) "
                     "SET p.dob_month = $dob_month, "
                     "    p.dob_year = $dob_year, "
                     "    p.gender = $gender, "
-                    "    p.person_type = $person_type, "
-                    "    p.agency_source = 'IDHW', "
-                    "    p.start_care_date = $start_care_date, "
-                    "    p.end_care_date = $end_care_date, "
-                    "    p.end_reason = $end_reason",
+                    "    p.death_date = $death_date",
                     insight_id=insight_id,
                     dob_month=record.get("dob_month"),
                     dob_year=record.get("dob_year"),
                     gender=record.get("gender"),
-                    person_type=person_type,
-                    start_care_date=record.get("start_care_date"),
-                    end_care_date=record.get("end_care_date"),
-                    end_reason=record.get("end_reason"),
+                    death_date=record.get("death_date")
                 )
 
-                # Create mother relationship
+                # Link to IDHW Agency
+                active_years = self._extract_active_years(record.get("start_care_date"), record.get("end_care_date"))
+                await session.run(
+                    "MATCH (p:Person {insight_id: $insight_id}), (a:Agency {agency_id: 'IDHW'}) "
+                    "MERGE (a)-[r:IN_AGENCY]->(p) "
+                    "SET r.active_years = $active_years",
+                    insight_id=insight_id,
+                    active_years=active_years
+                )
+
+                # Create PARENT_OF relationships (from parents TO child)
+                child_id = record.get("child_insight_id") or insight_id
                 mother_id = record.get("mother_insight_id")
+                father_id = record.get("father_insight_id")
+
                 if mother_id:
                     await session.run(
                         "MERGE (c:Person {insight_id: $child_id}) "
                         "MERGE (m:Person {insight_id: $mother_id}) "
-                        "SET m.person_type = COALESCE(m.person_type, 'mother') "
-                        "MERGE (c)-[:HAS_MOTHER]->(m)",
-                        child_id=insight_id,
+                        "MERGE (m)-[:PARENT_OF {role: 'Mother'}]->(c)",
+                        child_id=child_id,
                         mother_id=mother_id,
                     )
 
-                # Create father relationship
-                father_id = record.get("father_insight_id")
                 if father_id:
                     await session.run(
                         "MERGE (c:Person {insight_id: $child_id}) "
                         "MERGE (f:Person {insight_id: $father_id}) "
-                        "SET f.person_type = COALESCE(f.person_type, 'father') "
-                        "MERGE (c)-[:HAS_FATHER]->(f)",
-                        child_id=insight_id,
+                        "MERGE (f)-[:PARENT_OF {role: 'Father'}]->(c)",
+                        child_id=child_id,
                         father_id=father_id,
                     )
 
                 count += 1
 
-        logger.info(f"Loaded {count} IDHW persons into Neo4j")
+        logger.info(f"Loaded {count} IDHW records into refined graph")
         return count
 
     async def load_idoc_sentences(self, records: list[dict]) -> int:
         """
-        Load IDOC sentence data. Creates :Sentence nodes
-        and SERVING_SENTENCE relationships.
+        Load IDOC memberships.
+        Minimalist Schema: Person nodes + link to IDOC Agency.
         """
         count = 0
         async with self.driver.session(database=self._database) as session:
+            await self._ensure_agency(session, "IDOC")
+
             for record in records:
                 insight_id = record.get("insight_id")
                 if not insight_id:
                     continue
 
-                # Upsert person node
+                # Upsert person traits (coalesce to preserve existing data)
                 await session.run(
                     "MERGE (p:Person {insight_id: $insight_id}) "
                     "SET p.gender = COALESCE(p.gender, $gender), "
                     "    p.dob_month = COALESCE(p.dob_month, $dob_month), "
-                    "    p.dob_year = COALESCE(p.dob_year, $dob_year), "
-                    "    p.agency_source = CASE WHEN p.agency_source IS NULL "
-                    "    THEN 'IDOC' ELSE p.agency_source + ',IDOC' END",
+                    "    p.dob_year = COALESCE(p.dob_year, $dob_year)",
                     insight_id=insight_id,
                     gender=record.get("gender"),
                     dob_month=record.get("dob_month"),
                     dob_year=record.get("dob_year"),
                 )
 
-                # Create sentence node
+                # Link to IDOC Agency
+                active_years = self._extract_active_years(record.get("sent_beg_dtd"), record.get("sent_ft_dtd"))
                 await session.run(
-                    "MERGE (p:Person {insight_id: $insight_id}) "
-                    "CREATE (s:Sentence {"
-                    "  offense_desc: $offense_desc, "
-                    "  crime_group: $crime_group, "
-                    "  sent_status: $sent_status, "
-                    "  mitt_status: $mitt_status, "
-                    "  sent_beg_dtd: $sent_beg_dtd, "
-                    "  sent_ft_dtd: $sent_ft_dtd"
-                    "}) "
-                    "CREATE (p)-[:SERVING_SENTENCE]->(s)",
+                    "MATCH (p:Person {insight_id: $insight_id}), (a:Agency {agency_id: 'IDOC'}) "
+                    "MERGE (a)-[r:IN_AGENCY]->(p) "
+                    "SET r.active_years = $active_years",
                     insight_id=insight_id,
-                    offense_desc=record.get("off_ldesc", record.get("offense_desc")),
-                    crime_group=record.get("crm_grp_desc", record.get("crime_group")),
-                    sent_status=record.get("sent_status"),
-                    mitt_status=record.get("mitt_status"),
-                    sent_beg_dtd=record.get("sent_beg_dtd"),
-                    sent_ft_dtd=record.get("sent_ft_dtd"),
+                    active_years=active_years
                 )
+
+                # Link to County
+                county = record.get("cnty_sdesc")
+                if county and str(county).strip():
+                    await session.run(
+                        "MERGE (c:County {name: $county}) "
+                        "MERGE (p:Person {insight_id: $insight_id}) "
+                        "MERGE (p)-[:ASSOCIATED_WITH]->(c)",
+                        county=str(county).title().strip(),
+                        insight_id=insight_id
+                    )
                 count += 1
 
-        logger.info(f"Loaded {count} IDOC sentences into Neo4j")
+        logger.info(f"Loaded {count} IDOC memberships into refined graph")
         return count
 
     async def load_idjc_commitments(self, records: list[dict]) -> int:
         """
-        Load IDJC commitment data. Creates :Commitment nodes
-        and JUVENILE_COMMITMENT relationships.
+        Load IDJC memberships.
+        Minimalist Schema: Person nodes + link to IDJC Agency.
         """
         count = 0
         async with self.driver.session(database=self._database) as session:
+            await self._ensure_agency(session, "IDJC")
+
             for record in records:
                 insight_id = record.get("insight_id")
                 if not insight_id:
@@ -222,56 +252,52 @@ class GraphMemory:
                     "MERGE (p:Person {insight_id: $insight_id}) "
                     "SET p.gender = COALESCE(p.gender, $gender), "
                     "    p.dob_month = COALESCE(p.dob_month, $dob_month), "
-                    "    p.dob_year = COALESCE(p.dob_year, $dob_year), "
-                    "    p.agency_source = CASE WHEN p.agency_source IS NULL "
-                    "    THEN 'IDJC' ELSE p.agency_source + ',IDJC' END",
+                    "    p.dob_year = COALESCE(p.dob_year, $dob_year)",
                     insight_id=insight_id,
                     gender=record.get("gender"),
                     dob_month=record.get("dob_month"),
                     dob_year=record.get("dob_year"),
                 )
 
+                # Link to IDJC Agency
+                active_years = self._extract_active_years(record.get("date_of_commitment"), record.get("date_of_release"))
                 await session.run(
-                    "MERGE (p:Person {insight_id: $insight_id}) "
-                    "CREATE (c:Commitment {"
-                    "  offense_desc: $offense_desc, "
-                    "  offense_category: $offense_category, "
-                    "  offense_level: $offense_level, "
-                    "  status: $status, "
-                    "  date_of_commitment: $commitment_date, "
-                    "  date_of_release: $release_date, "
-                    "  county: $county"
-                    "}) "
-                    "CREATE (p)-[:JUVENILE_COMMITMENT]->(c)",
+                    "MATCH (p:Person {insight_id: $insight_id}), (a:Agency {agency_id: 'IDJC'}) "
+                    "MERGE (a)-[r:IN_AGENCY]->(p) "
+                    "SET r.active_years = $active_years",
                     insight_id=insight_id,
-                    offense_desc=record.get("OFFENSE_DESCRIPTION", record.get("offense_description")),
-                    offense_category=record.get("OFFENSE_CATEGORY", record.get("offense_category")),
-                    offense_level=record.get("OFFENSE_LEVEL", record.get("offense_level")),
-                    status=record.get("STATUS", record.get("status")),
-                    commitment_date=record.get("DATE_OF_COMMITMENT", record.get("date_of_commitment")),
-                    release_date=record.get("DATE_OF_RELEASE", record.get("date_of_release")),
-                    county=record.get("COMMITTING_COUNTY", record.get("committing_county")),
+                    active_years=active_years
                 )
+
+                # Link to County
+                county = record.get("committing_county")
+                if county and str(county).strip():
+                    await session.run(
+                        "MERGE (c:County {name: $county}) "
+                        "MERGE (p:Person {insight_id: $insight_id}) "
+                        "MERGE (p)-[:ASSOCIATED_WITH]->(c)",
+                        county=str(county).title().strip(),
+                        insight_id=insight_id
+                    )
                 count += 1
 
-        logger.info(f"Loaded {count} IDJC commitments into Neo4j")
+        logger.info(f"Loaded {count} IDJC memberships into refined graph")
         return count
 
-    # ── Graph Queries ───────────────────────────────────────────
+    # ── Refined Graph Queries ───────────────────────────────────
 
     async def count_foster_children_with_incarcerated_parents(self) -> dict:
         """
-        Core cross-agency Cypher query:
-        How many foster children have at least one parent with
-        an active sentence?
+        Cross-agency query using minimalist schema:
+        Person in IDHW (child) is linked via PARENT_OF to Person in IDOC.
         """
         async with self.driver.session(database=self._database) as session:
             result = await session.run(
-                "MATCH (c:Child)-[:HAS_MOTHER|HAS_FATHER]->(p:Person)"
-                "-[:SERVING_SENTENCE]->(s:Sentence) "
-                "WHERE s.sent_status <> 'DISCHARGED' "
-                "RETURN count(DISTINCT c) AS count, "
-                "       count(DISTINCT p) AS parent_count"
+                "MATCH (a_idhw:Agency {agency_id: 'IDHW'})-[:IN_AGENCY]->(child:Person) "
+                "MATCH (parent:Person)-[:PARENT_OF]->(child) "
+                "MATCH (a_idoc:Agency {agency_id: 'IDOC'})-[:IN_AGENCY]->(parent) "
+                "RETURN count(DISTINCT child) AS count, "
+                "       count(DISTINCT parent) AS parent_count"
             )
             record = await result.single()
             return {
@@ -281,13 +307,13 @@ class GraphMemory:
             }
 
     async def count_incarcerated_with_foster_children(self) -> dict:
-        """Bidirectional: incarcerated individuals who have foster children."""
+        """Bidirectional query using minimalist schema."""
         async with self.driver.session(database=self._database) as session:
             result = await session.run(
-                "MATCH (p:Person)-[:SERVING_SENTENCE]->(s:Sentence), "
-                "      (c:Child)-[:HAS_MOTHER|HAS_FATHER]->(p) "
-                "WHERE s.sent_status <> 'DISCHARGED' "
-                "RETURN count(DISTINCT p) AS count"
+                "MATCH (a_idoc:Agency {agency_id: 'IDOC'})-[:IN_AGENCY]->(parent:Person) "
+                "MATCH (parent)-[:PARENT_OF]->(child:Person) "
+                "MATCH (a_idhw:Agency {agency_id: 'IDHW'})-[:IN_AGENCY]->(child) "
+                "RETURN count(DISTINCT parent) AS count"
             )
             record = await result.single()
             return {
@@ -296,11 +322,11 @@ class GraphMemory:
             }
 
     async def count_foster_youth_with_juvenile_record(self) -> dict:
-        """Foster children who also have juvenile commitment records."""
+        """Symmetry query: Person linked to both IDHW and IDJC."""
         async with self.driver.session(database=self._database) as session:
             result = await session.run(
-                "MATCH (c:Child)-[:JUVENILE_COMMITMENT]->(commit:Commitment) "
-                "RETURN count(DISTINCT c) AS count"
+                "MATCH (a_idhw:Agency {agency_id: 'IDHW'})-[:IN_AGENCY]->(p:Person)<-[:IN_AGENCY]-(a_idjc:Agency {agency_id: 'IDJC'}) "
+                "RETURN count(DISTINCT p) AS count"
             )
             record = await result.single()
             return {
@@ -309,49 +335,57 @@ class GraphMemory:
             }
 
     async def get_family_network(self, insight_id: str, depth: int = 2) -> dict:
-        """Get the family network for a person up to N hops."""
+        """Get network around a Person using PARENT_OF."""
         async with self.driver.session(database=self._database) as session:
             result = await session.run(
                 "MATCH path = (p:Person {insight_id: $insight_id})"
-                "-[*1.." + str(depth) + "]-(connected) "
+                "-[*1.." + str(depth) + "]-(connected:Person) "
                 "RETURN nodes(path) AS nodes, relationships(path) AS rels "
                 "LIMIT 100",
                 insight_id=insight_id,
             )
             records = [r async for r in result]
-            nodes = set()
+            nodes_data = {}
             edges = []
             for record in records:
                 for node in record["nodes"]:
-                    nodes.add(node.get("insight_id", str(node.id)))
+                    nid = node.get("insight_id")
+                    if nid and nid not in nodes_data:
+                        nodes_data[nid] = {
+                            "insight_id": nid,
+                            "dob_year": node.get("dob_year"),
+                            "gender": node.get("gender")
+                        }
                 for rel in record["rels"]:
                     edges.append({
                         "type": rel.type,
-                        "start": rel.start_node.get("insight_id", ""),
-                        "end": rel.end_node.get("insight_id", ""),
+                        "start": rel.start_node.get("insight_id"),
+                        "end": rel.end_node.get("insight_id"),
                     })
             return {
                 "root": insight_id,
-                "nodes": list(nodes),
+                "nodes": list(nodes_data.values()),
                 "edges": edges,
                 "depth": depth,
             }
 
     async def get_graph_stats(self) -> dict:
-        """Get graph statistics."""
+        """Get graph statistics for the minimalist model."""
         async with self.driver.session(database=self._database) as session:
             result = await session.run(
-                "MATCH (n) RETURN count(n) AS nodes "
-                "UNION ALL "
-                "MATCH ()-[r]->() RETURN count(r) AS nodes"
+                "MATCH (n) RETURN labels(n)[0] AS label, count(*) AS count"
             )
             records = [r async for r in result]
-            node_count = records[0]["nodes"] if records else 0
-            edge_count = records[1]["nodes"] if len(records) > 1 else 0
-            return {
-                "nodes": node_count,
-                "edges": edge_count,
-            }
+            stats = {record["label"]: record["count"] for record in records}
+
+            result_edges = await session.run(
+                "MATCH ()-[r]->() RETURN type(r) AS type, count(*) AS count"
+            )
+            edge_records = [r async for r in result_edges]
+            for r in edge_records:
+                stats[f"rel_{r['type']}"] = r["count"]
+
+            return stats
 
 
 # Module-level singleton

@@ -105,9 +105,9 @@ Original Question: {question}
 Data from agencies ({sources_str}):
 {result_str}
 
-Provide a clear, concise, natural language answer to the original question. Focus on answering the specific question asked.
-Be conversational but professional. Include relevant details from the data.
-If there are limitations or gaps in the data, mention them briefly."""
+Provide a clear, concise, and direct natural language answer to the original question. Focus ONLY on answering the specific question asked using the provided data.
+Be conversational but professional. Do NOT add extra fluff, warnings about limitations, or assumptions about data completeness. State the facts clearly.
+If the data contains a breakdown or list of counts, YOU MUST format it as a cleanly aligned Markdown Table (e.g., `| Type | Count |`)."""
 
     try:
         response = await llm.ainvoke(prompt)
@@ -130,8 +130,75 @@ def _format_reasoning_result(reasoning_result: dict[str, Any]) -> str:
         return "No data found."
 
     lines = []
+    query_type = reasoning_result.get("query_type", "")
 
-    # Format IDHW data
+    # Handle single-agency statistics results (from reasoning node)
+    if query_type == "single_agency_statistics":
+        agency = reasoning_result.get("agency", "unknown").upper()
+        count = reasoning_result.get("count", 0)
+        total_records = reasoning_result.get("total_records", 0)
+        breakdown = reasoning_result.get("breakdown", {})
+
+        agency_names = {
+            "IDHW": "Idaho Dept. of Health and Welfare (Foster Care)",
+            "IDJC": "Idaho Dept. of Juvenile Corrections",
+            "IDOC": "Idaho Dept. of Corrections",
+        }
+        agency_label = agency_names.get(agency, agency)
+
+        lines.append(f"From {agency_label}:")
+        lines.append(f"  - Total unique people: {count}")
+        if total_records and total_records != count:
+            lines.append(f"  - Total records: {total_records}")
+        if breakdown and isinstance(breakdown, dict):
+            if "top_offenders" in breakdown:
+                lines.append("  - Top Offenders:")
+                for item in breakdown["top_offenders"]:
+                    lines.append(f"    - {item['insight_id']}: {item['offense_count']} offenses")
+            else:
+                lines.append("  - Breakdown:")
+                for status, status_count in breakdown.items():
+                    if isinstance(status_count, (int, float)):
+                        lines.append(f"    - {status}: {status_count}")
+        return "\n".join(lines)
+
+    # Handle cross-agency query results
+    if query_type == "foster_children_with_incarcerated_parents":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_foster", reasoning_result.get("total_children", 0))
+        lines.append(f"Cross-Agency Result: {count} foster children have at least one incarcerated parent")
+        lines.append(f"  - Total foster children examined: {total}")
+        
+    elif query_type == "foster_kids_with_foster_parents_in_idoc":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_foster", 0)
+        lines.append(f"Cross-Agency Result: {count} foster children have at least one incarcerated parent who was ALSO in foster care.")
+        lines.append(f"  - Total foster children examined: {total}")
+        lines.append(f"  - Incarcerated parents found: {reasoning_result.get('incarcerated_parent_count', 0)}")
+        return "\n".join(lines)
+
+    if query_type == "incarcerated_with_foster_children":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_incarcerated", 0)
+        lines.append(f"Cross-Agency Result: {count} incarcerated individuals have children in foster care")
+        lines.append(f"  - Total incarcerated examined: {total}")
+        return "\n".join(lines)
+
+    if query_type == "foster_youth_with_juvenile_record":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_foster", reasoning_result.get("total_children", 0))
+        lines.append(f"Cross-Agency Result: {count} foster youth also have juvenile detention records")
+        lines.append(f"  - Total foster children examined: {total}")
+        return "\n".join(lines)
+
+    if query_type == "juvenile_youth_with_adult_record":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_juvenile", 0)
+        lines.append(f"Cross-Agency Result: {count} people in juvenile corrections (IDJC) also have adult records (IDOC)")
+        lines.append(f"  - Total juvenile records examined: {total}")
+        return "\n".join(lines)
+
+    # Fallback: format raw agency data if present
     idhw_data = reasoning_result.get("idhw_data", {})
     if idhw_data:
         lines.append("From IDHW (Foster Care & Family Services):")
@@ -140,21 +207,18 @@ def _format_reasoning_result(reasoning_result: dict[str, Any]) -> str:
         if idhw_data.get("family_relationships"):
             lines.append(f"  - Found {len(idhw_data['family_relationships'])} family relationships")
 
-    # Format IDJC data
     idjc_data = reasoning_result.get("idjc_data", {})
     if idjc_data:
         lines.append("From IDJC (Juvenile Corrections):")
         if idjc_data.get("commitments"):
             lines.append(f"  - Found {len(idjc_data['commitments'])} commitment records")
 
-    # Format IDOC data
     idoc_data = reasoning_result.get("idoc_data", {})
     if idoc_data:
         lines.append("From IDOC (Adult Corrections):")
         if idoc_data.get("inmates"):
             lines.append(f"  - Found {len(idoc_data['inmates'])} inmate records")
 
-    # Format cross-agency matches
     identity_matches = reasoning_result.get("identity_matches", {})
     if identity_matches:
         lines.append("Cross-Agency Identity Matches:")
@@ -186,8 +250,65 @@ def _template_based_answer(
         return "No information was found to answer your question."
 
     source_str = ", ".join(sources) if sources else "the available data"
+    query_type = reasoning_result.get("query_type", "")
 
-    # Count results
+    # Handle single-agency statistics directly
+    if query_type == "single_agency_statistics":
+        agency = reasoning_result.get("agency", "unknown").upper()
+        count = reasoning_result.get("count", 0)
+        total_records = reasoning_result.get("total_records", 0)
+        breakdown = reasoning_result.get("breakdown", {})
+
+        agency_names = {
+            "IDHW": "IDHW (Health and Welfare / Foster Care)",
+            "IDJC": "IDJC (Juvenile Corrections)",
+            "IDOC": "IDOC (Adult Corrections)",
+        }
+        label = agency_names.get(agency, agency)
+
+        answer = f"Based on {label} data, there are {count} unique individuals in the system."
+        if total_records and total_records != count:
+            answer += f" There are {total_records} total records (some individuals have multiple records)."
+        if breakdown and isinstance(breakdown, dict):
+            status_parts = [f"{k}: {v}" for k, v in breakdown.items() if isinstance(v, (int, float))]
+            if status_parts:
+                answer += f" Breakdown by status: {', '.join(status_parts)}."
+        return answer
+
+    # Handle cross-agency results
+    if query_type == "foster_children_with_incarcerated_parents":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_foster", reasoning_result.get("total_children", 0))
+        return (
+            f"Based on cross-agency data, {count} out of {total} foster children "
+            f"have at least one parent who is currently incarcerated."
+        )
+
+    if query_type == "incarcerated_with_foster_children":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_incarcerated", 0)
+        return (
+            f"Based on cross-agency data, {count} out of {total} incarcerated individuals "
+            f"have children in the foster care system."
+        )
+
+    if query_type == "foster_youth_with_juvenile_record":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_foster", reasoning_result.get("total_children", 0))
+        return (
+            f"Based on cross-agency data, {count} out of {total} foster youth "
+            f"also have juvenile detention records."
+        )
+
+    if query_type == "juvenile_youth_with_adult_record":
+        count = reasoning_result.get("count", 0)
+        total = reasoning_result.get("total_juvenile", 0)
+        return (
+            f"Based on cross-agency data, {count} out of {total} people with juvenile records "
+            f"also have adult incarceration records."
+        )
+
+    # Fallback: count raw data
     idhw_count = 0
     idjc_count = 0
     idoc_count = 0
@@ -209,7 +330,6 @@ def _template_based_answer(
     if total_results == 0:
         return f"No matching records were found in {source_str}."
 
-    # Build answer based on counts
     answer_parts = [f"Based on data from {source_str}:"]
 
     if idhw_count > 0:

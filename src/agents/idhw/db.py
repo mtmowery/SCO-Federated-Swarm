@@ -81,7 +81,7 @@ async def get_family_relationships() -> list[dict[str, Any]]:
     Returns:
         List of dicts with keys:
           child_insight_id, mother_insight_id, father_insight_id,
-          first_name, last_name, dob, start_care_date, end_care_date, end_reason
+          gender, dob_month, dob_year, start_care_date, end_care_date, end_reason
     """
     session_maker = await get_pg_session("idhw")
 
@@ -91,9 +91,9 @@ async def get_family_relationships() -> list[dict[str, Any]]:
             IDHWPerson.mother_insight_id,
             IDHWPerson.father_insight_id,
             IDHWPerson.insight_id,        # child's own insight_id (may equal child_insight_id)
-            IDHWPerson.first_name,
-            IDHWPerson.last_name,
-            IDHWPerson.dob,
+            IDHWPerson.gender,
+            IDHWPerson.dob_month,
+            IDHWPerson.dob_year,
             IDHWPerson.start_care_date,
             IDHWPerson.end_care_date,
             IDHWPerson.end_reason,
@@ -107,9 +107,9 @@ async def get_family_relationships() -> list[dict[str, Any]]:
                 "mother_insight_id": row[1],
                 "father_insight_id": row[2],
                 "insight_id": row[3],
-                "first_name": row[4],
-                "last_name": row[5],
-                "dob": str(row[6]) if row[6] else None,
+                "gender": row[4],
+                "dob_month": str(row[5]) if row[5] else None,
+                "dob_year": str(row[6]) if row[6] else None,
                 "start_care_date": str(row[7]) if row[7] else None,
                 "end_care_date": str(row[8]) if row[8] else None,
                 "end_reason": row[9],

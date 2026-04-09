@@ -86,8 +86,16 @@ def cmd_load_graph(args: argparse.Namespace) -> None:
     asyncio.run(_load_graph())
 
 
+def cmd_load_vectors(args: argparse.Namespace) -> None:
+    """Load Qdrant Vector database with semantic text representations."""
+    async def _vectors():
+        from data.loaders.vector_loader import VectorLoader
+        loader = VectorLoader()
+        await loader.load_all()
+    asyncio.run(_vectors())
+
 def cmd_load_all(args: argparse.Namespace) -> None:
-    """Load CSV data then populate graph — full pipeline."""
+    """Load CSV data then populate graph and vectors — full pipeline."""
 
     async def _pipeline():
         logger.info("Phase 1: Loading CSV data into PostgreSQL...")
@@ -99,6 +107,11 @@ def cmd_load_all(args: argparse.Namespace) -> None:
         from data.loaders.graph_loader import GraphLoader
         graph_loader = GraphLoader()
         await graph_loader.load_all()
+        
+        logger.info("Phase 3: Populating Qdrant Vectors from PostgreSQL...")
+        from data.loaders.vector_loader import VectorLoader
+        vector_loader = VectorLoader()
+        await vector_loader.load_all()
 
         logger.info("Data pipeline complete.")
 
@@ -279,6 +292,10 @@ def build_parser() -> argparse.ArgumentParser:
     # load-graph
     p_graph = sub.add_parser("load-graph", help="Populate Neo4j from PostgreSQL")
     p_graph.set_defaults(func=cmd_load_graph)
+
+    # load-vectors
+    p_vectors = sub.add_parser("load-vectors", help="Populate Qdrant from PostgreSQL")
+    p_vectors.set_defaults(func=cmd_load_vectors)
 
     # load-all
     p_all = sub.add_parser("load-all", help="Full pipeline: CSV -> PostgreSQL -> Neo4j")

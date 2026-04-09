@@ -140,6 +140,11 @@ async def get_capabilities() -> CapabilitiesResponse:
             "parameters": {"insight_ids": "list[str] (required)"},
         },
         {
+            "name": "get_top_offenders",
+            "description": "Get top 10 individuals with most offenses",
+            "parameters": {"limit": "int (default: 10)"},
+        },
+        {
             "name": "get_offense_summary",
             "description": "Get aggregate counts by offense category",
             "parameters": {},
@@ -185,17 +190,26 @@ async def execute_tool(request: ExecuteRequest) -> ExecuteResponse:
 
         logger.info(f"Executing tool: {tool_name} with args: {arguments}")
 
-        from . import db
+        from . import tools as idjc_tools
 
+        # Use tools.py wrappers (not raw db functions) so return types
+        # match the dict schemas the executor/controller expects.
+        # Raw db functions return bare ints / flat dicts, while the
+        # tools wrappers return structured dicts with named keys like
+        # {"total_people_count": N}, {"counts": {...}, "total_records": N}.
         direct_tools = {
-            "get_commitments": db.get_all_commitments,
-            "get_person": db.get_person_by_insight_id,
-            "get_people_bulk": db.get_people_by_insight_ids,
-            "get_active_commitments": db.get_active_commitments,
-            "check_juvenile_record": db.check_juvenile_record,
-            "get_offense_summary": db.get_offense_summary,
-            "count_by_status": db.count_by_status,
-            "search_commitments": db.search_commitments,
+            "get_commitments": idjc_tools.get_commitments,
+            "get_person": idjc_tools.get_person,
+            "get_people_bulk": idjc_tools.get_people_bulk,
+            "get_active_commitments": idjc_tools.get_active_commitments,
+            "check_juvenile_record": idjc_tools.check_juvenile_record,
+            "get_offense_summary": idjc_tools.get_offense_summary,
+            "get_offense_breakdown": idjc_tools.get_offense_breakdown,
+            "count_by_status": idjc_tools.count_by_status,
+            "search_commitments": idjc_tools.search_commitments,
+            "count_total_people": idjc_tools.count_total_people,
+            "get_all_insight_ids": idjc_tools.get_all_insight_ids,
+            "get_top_offenders": idjc_tools.get_top_offenders,
         }
 
         if tool_name not in direct_tools:

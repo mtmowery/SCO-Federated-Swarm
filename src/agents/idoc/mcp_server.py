@@ -168,19 +168,26 @@ async def execute_tool(request: ExecuteRequest) -> dict:
 
     # Removed broken mcp.tools extraction
 
-    # Import the functions directly to avoid complex MCP reflection
-    from . import db
+    # Use tools.py wrappers (not raw db functions) so return types
+    # match the dict schemas the executor/controller expects.
+    # Raw db functions return bare ints / flat dicts, while the
+    # tools wrappers return structured dicts with named keys like
+    # {"total_people_count": N}, {"total_sentences": N, "by_status": {...}}.
+    from . import tools as idoc_tools
 
     direct_tools = {
-        "get_sentences": db.get_all_sentences,
-        "get_person": db.get_person_by_insight_id,
-        "get_people_bulk": db.get_people_by_insight_ids,
-        "check_incarceration": db.check_incarceration,
-        "count_incarcerated": db.count_incarcerated_from_ids,
-        "get_active_offenders": db.get_active_offenders,
-        "get_offense_summary": db.get_offense_summary,
-        "count_by_status": db.count_by_status,
-        "search_sentences": db.search_sentences,
+        "get_sentences": idoc_tools.get_sentences,
+        "get_person": idoc_tools.get_person,
+        "get_people_bulk": idoc_tools.get_people_bulk,
+        "check_incarceration": idoc_tools.check_incarceration,
+        "count_incarcerated": idoc_tools.count_incarcerated,
+        "get_active_offenders": idoc_tools.get_active_offenders,
+        "get_offense_summary": idoc_tools.get_offense_summary,
+        "get_offense_breakdown": idoc_tools.get_offense_breakdown,
+        "count_by_status": idoc_tools.count_by_status,
+        "search_sentences": idoc_tools.search_sentences,
+        "count_total_people": idoc_tools.count_total_people,
+        "get_all_insight_ids": idoc_tools.get_all_insight_ids,
     }
 
     if request.tool_name not in direct_tools:

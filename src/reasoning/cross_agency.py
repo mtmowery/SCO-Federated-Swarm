@@ -424,8 +424,17 @@ async def reasoning_node(state: InsightState) -> dict:
         val = getattr(a, "value", a)
         agency_vals.append(str(val).split(".")[-1].lower())
 
-    if (intent_val in ("statistics", "single_agency", "lookup") or "breakdown" in question or "murder" in question or "theft" in question) and len(agency_vals) == 1:
-        agency = agency_vals[0]
+    q_lower = question.lower()
+    is_single_agency_override = "breakdown" in q_lower or "murder" in q_lower or "theft" in q_lower or "top" in q_lower or "most" in q_lower
+    
+    if (intent_val in ("statistics", "single_agency", "lookup") and len(agency_vals) == 1) or is_single_agency_override:
+        # If the planner hallucinates multiple agencies for a clear single-agency override query, force single agency
+        agency = agency_vals[0] if agency_vals else "unknown"
+        if is_single_agency_override:
+            if "idjc" in q_lower: agency = "idjc"
+            elif "idhw" in q_lower: agency = "idhw"
+            elif "idoc" in q_lower: agency = "idoc"
+
         count = 0
         breakdown: dict[str, Any] = {}
         total_records = 0

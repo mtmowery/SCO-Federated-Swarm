@@ -1,24 +1,6 @@
-import asyncio
-from shared.schemas import InsightState, QueryIntent, AgencyName
-from src.controller.executor import execute_idjc
-from src.reasoning.cross_agency import reasoning_node
+from src.controller.answer import _format_reasoning_result
+import json
 
-async def main():
-    state = InsightState(
-        messages=[{"role": "user", "content": "give a list of the top 10 idjc individuals with the most offenses"}],
-        question="give a list of the top 10 idjc individuals with the most offenses",
-        intent=QueryIntent.STATISTICS,
-        agencies=[AgencyName.IDJC],
-        idhw_data={}, idjc_data={}, idoc_data={},
-        errors=[], execution_trace=[], sources=[], planner={}, plan=[]
-    )
-    
-    res_idjc = await execute_idjc(state)
-    state.update(res_idjc)
-    print("idjc data stats keys:", state.get("idjc_data", {}).get("statistics", {}).keys())
-    
-    res_reason = await reasoning_node(state)
-    print("Reasoning res:", res_reason)
+res = {'query_type': 'single_agency_statistics', 'count': 500, 'total_records': 1953, 'breakdown': {'top_offenders': [{'insight_id': 'INS-00000867', 'offense_count': 20}, {'insight_id': 'INS-00000158', 'offense_count': 20}, {'insight_id': 'INS-00000886', 'offense_count': 19}, {'insight_id': 'INS-00000806', 'offense_count': 19}, {'insight_id': 'INS-00000783', 'offense_count': 19}, {'insight_id': 'INS-00000763', 'offense_count': 18}, {'insight_id': 'INS-00000883', 'offense_count': 18}, {'insight_id': 'INS-00000694', 'offense_count': 17}, {'insight_id': 'INS-00000019', 'offense_count': 17}, {'insight_id': 'INS-00000733', 'offense_count': 17}]}, 'agency': 'idjc', 'confidence': 0.95, 'graph_stats': {'nodes': 1, 'edges': 0}, 'timestamp': '2026-04-09T16:07:56.141286+00:00'}
 
-if __name__ == "__main__":
-    asyncio.run(main())
+print(_format_reasoning_result(res))
